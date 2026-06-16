@@ -43,3 +43,10 @@ from .firebase import (
     get_meal_plan_daily,
     update_meal_plan_daily,
 )
+from .firebase.goals import (
+    get_goals,
+    add_goal,
+    update_goal,
+    increment_goal_progress,
+    delete_goal,
+)

@@ -41,6 +41,11 @@ from services.firebase_service import (
     get_meal_plan_sections,
     get_meal_plan_daily,
     update_meal_plan_daily,
+    get_goals,
+    add_goal,
+    update_goal,
+    increment_goal_progress,
+    delete_goal,
 )
 
 # Initialize logger
@@ -664,6 +669,102 @@ def user_meal_plan_put():
     return jsonify({"status": "success", "entry": payload}), 200
 
 
+@app.route("/api/user/goals", methods=["GET"])
+def user_goals_get():
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    goals = get_goals(email)
+    return jsonify({"status": "success", "goals": goals}), 200
+
+
+@app.route("/api/user/goals", methods=["POST"])
+def user_goals_post():
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    title = data.get("title")
+    description = data.get("description", "")
+    target = data.get("target")
+    unit = data.get("unit", "")
+    deadline = data.get("deadline")
+    category = data.get("category", "")
+    ok, err, goals = add_goal(email, title, description, target, unit, deadline, category)
+    if not ok:
+        code = 400
+        if err == "no_user":
+            code = 404
+        elif err == "too_many_goals":
+            code = 429
+        elif err == "write_failed":
+            code = 500
+        return jsonify({"status": "error", "error": err or "add_failed"}), code
+    return jsonify({"status": "success", "goals": goals}), 201
+
+
+@app.route("/api/user/goals/<goal_id>", methods=["PATCH"])
+def user_goals_patch(goal_id):
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    ok, err, goals = update_goal(email, goal_id, data)
+    if not ok:
+        code = 400
+        if err == "no_user":
+            code = 404
+        elif err == "not_found":
+            code = 404
+        elif err == "write_failed":
+            code = 500
+        return jsonify({"status": "error", "error": err or "update_failed"}), code
+    return jsonify({"status": "success", "goals": goals}), 200
+
+
+@app.route("/api/user/goals/<goal_id>/increment", methods=["POST"])
+def user_goals_increment(goal_id):
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    amount = data.get("amount", 1)
+    ok, err, goals = increment_goal_progress(email, goal_id, amount)
+    if not ok:
+        code = 400
+        if err == "no_user":
+            code = 404
+        elif err == "not_found":
+            code = 404
+        elif err == "write_failed":
+            code = 500
+        return jsonify({"status": "error", "error": err or "increment_failed"}), code
+    return jsonify({"status": "success", "goals": goals}), 200
+
+
+@app.route("/api/user/goals/<goal_id>", methods=["DELETE"])
+def user_goals_delete(goal_id):
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    ok, err, goals = delete_goal(email, goal_id)
+    if not ok:
+        code = 400
+        if err == "no_user":
+            code = 404
+        elif err == "not_found":
+            code = 404
+        elif err == "write_failed":
+            code = 500
+        return jsonify({"status": "error", "error": err or "delete_failed"}), code
+    return jsonify({"status": "success", "goals": goals}), 200
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -760,6 +861,11 @@ def root():
                 'PUT /api/user/day-planner/daily': 'Save slots body { date, slots: { "0": optionId, ... } }',
                 'GET /api/user/meal-plan': 'Get trainer meal sections and today selection/completion entry',
                 'PUT /api/user/meal-plan': 'Save today meal entry body { date, selections, completed }',
+                'GET /api/user/goals': 'List all goals for the current user',
+                'POST /api/user/goals': 'Add a new goal body { title, description?, target?, unit?, deadline?, category? }',
+                'PATCH /api/user/goals/<goal_id>': 'Update a goal body { title?, description?, target?, current?, unit?, deadline?, category?, completed? }',
+                'POST /api/user/goals/<goal_id>/increment': 'Increment goal progress body { amount? } (default: 1)',
+                'DELETE /api/user/goals/<goal_id>': 'Delete a goal',
                 'GET /': 'This information endpoint'
             },
             'timestamp': datetime.now().isoformat()
