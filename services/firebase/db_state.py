@@ -19,3 +19,4 @@ flashcards_memory = {}
 day_planner_options_memory = {}
 day_planner_daily_memory = {}
 meal_plan_daily_memory = {}
+goals_memory = {}
