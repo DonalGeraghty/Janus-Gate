@@ -50,3 +50,15 @@ from .firebase.goals import (
     increment_goal_progress,
     delete_goal,
 )
+from .firebase.sleep import (
+    get_sleep_entries,
+    add_sleep_entry,
+    update_sleep_entry,
+    delete_sleep_entry,
+)
+from .firebase.achievements import (
+    get_achievements,
+    unlock_achievements,
+    get_achievement_definitions,
+    get_user_stats,
+)

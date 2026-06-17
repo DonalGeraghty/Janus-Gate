@@ -46,7 +46,16 @@ from services.firebase_service import (
     update_goal,
     increment_goal_progress,
     delete_goal,
+    get_sleep_entries,
+    add_sleep_entry,
+    update_sleep_entry,
+    delete_sleep_entry,
+    get_achievements,
+    unlock_achievements,
+    get_achievement_definitions,
+    get_user_stats,
 )
+from services.export_service import export_user_data
 
 # Initialize logger
 logger = get_flask_app_logger()
@@ -765,6 +774,149 @@ def user_goals_delete(goal_id):
     return jsonify({"status": "success", "goals": goals}), 200
 
 
+# Sleep Tracker Endpoints
+
+@app.route("/api/user/sleep", methods=["GET"])
+def user_sleep_get():
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    entries = get_sleep_entries(email)
+    return jsonify({"status": "success", "entries": entries}), 200
+
+
+@app.route("/api/user/sleep", methods=["POST"])
+def user_sleep_post():
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    date = data.get("date")
+    bedtime = data.get("bedtime")
+    wakeup = data.get("wakeup")
+    quality = data.get("quality")
+    duration_minutes = data.get("durationMinutes")
+    notes = data.get("notes", "")
+    ok, err, entries = add_sleep_entry(email, date, bedtime, wakeup, quality, duration_minutes, notes)
+    if not ok:
+        code = 400
+        if err == "no_user":
+            code = 404
+        elif err == "too_many_entries":
+            code = 429
+        elif err == "write_failed":
+            code = 500
+        return jsonify({"status": "error", "error": err or "add_failed"}), code
+    return jsonify({"status": "success", "entries": entries}), 201
+
+
+@app.route("/api/user/sleep/<entry_id>", methods=["PATCH"])
+def user_sleep_patch(entry_id):
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    ok, err, entries = update_sleep_entry(email, entry_id, data)
+    if not ok:
+        code = 400
+        if err == "no_user":
+            code = 404
+        elif err == "not_found":
+            code = 404
+        elif err == "write_failed":
+            code = 500
+        return jsonify({"status": "error", "error": err or "update_failed"}), code
+    return jsonify({"status": "success", "entries": entries}), 200
+
+
+@app.route("/api/user/sleep/<entry_id>", methods=["DELETE"])
+def user_sleep_delete(entry_id):
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    ok, err, entries = delete_sleep_entry(email, entry_id)
+    if not ok:
+        code = 400
+        if err == "no_user":
+            code = 404
+        elif err == "not_found":
+            code = 404
+        elif err == "write_failed":
+            code = 500
+        return jsonify({"status": "error", "error": err or "delete_failed"}), code
+    return jsonify({"status": "success", "entries": entries}), 200
+
+
+# Achievements Endpoints
+
+@app.route("/api/user/achievements", methods=["GET"])
+def user_achievements_get():
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    achievements = get_achievements(email)
+    return jsonify({"status": "success", "achievements": achievements}), 200
+
+
+@app.route("/api/user/achievements/unlock", methods=["POST"])
+def user_achievements_unlock():
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    ok, err, achievements = unlock_achievements(email)
+    if not ok:
+        code = 400
+        if err == "no_user":
+            code = 404
+        elif err == "write_failed":
+            code = 500
+        return jsonify({"status": "error", "error": err or "unlock_failed"}), code
+    return jsonify({"status": "success", "achievements": achievements}), 200
+
+
+@app.route("/api/user/achievements/definitions", methods=["GET"])
+def user_achievements_definitions_get():
+    definitions = get_achievement_definitions()
+    return jsonify({"status": "success", "definitions": definitions}), 200
+
+
+@app.route("/api/user/stats", methods=["GET"])
+def user_stats_get():
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    stats = get_user_stats(email)
+    return jsonify({"status": "success", "stats": stats}), 200
+
+
+# Export Endpoint
+
+@app.route("/api/user/export", methods=["GET"])
+def user_export_get():
+    token = _bearer_token()
+    email = decode_access_token(token)
+    if not email:
+        return jsonify({"status": "error", "error": "Unauthorized"}), 401
+    
+    ok, err, zip_bytes, filename = export_user_data(email)
+    if not ok:
+        return jsonify({"status": "error", "error": err or "export_failed"}), 500
+    
+    # Return ZIP file as download
+    from flask import make_response
+    response = make_response(zip_bytes)
+    response.headers['Content-Type'] = 'application/zip'
+    response.headers['Content-Disposition'] = f'attachment; filename={filename}'
+    return response
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
@@ -866,6 +1018,15 @@ def root():
                 'PATCH /api/user/goals/<goal_id>': 'Update a goal body { title?, description?, target?, current?, unit?, deadline?, category?, completed? }',
                 'POST /api/user/goals/<goal_id>/increment': 'Increment goal progress body { amount? } (default: 1)',
                 'DELETE /api/user/goals/<goal_id>': 'Delete a goal',
+                'GET /api/user/sleep': 'List all sleep entries for the current user',
+                'POST /api/user/sleep': 'Add a sleep entry body { date, bedtime?, wakeup?, quality?, durationMinutes?, notes? }',
+                'PATCH /api/user/sleep/<entry_id>': 'Update a sleep entry body { date?, bedtime?, wakeup?, quality?, durationMinutes?, notes? }',
+                'DELETE /api/user/sleep/<entry_id>': 'Delete a sleep entry',
+                'GET /api/user/achievements': 'List all unlocked achievements for the current user',
+                'POST /api/user/achievements/unlock': 'Check and unlock new achievements',
+                'GET /api/user/achievements/definitions': 'Get all achievement definitions',
+                'GET /api/user/stats': 'Get user statistics (streaks, totals, etc.)',
+                'GET /api/user/export': 'Export all user data as a ZIP file',
                 'GET /': 'This information endpoint'
             },
             'timestamp': datetime.now().isoformat()
