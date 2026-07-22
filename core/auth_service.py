@@ -62,6 +62,10 @@ def decode_access_token(token):
 
 
 def register_user(email, password):
+    if not isinstance(email, str):
+        return None, "invalid_email", None
+    if not isinstance(password, str):
+        return None, "weak_password", None
     email_norm = (email or "").strip().lower()
     if not email_norm or "@" not in email_norm or len(email_norm) > 320:
         return None, "invalid_email", None
@@ -78,6 +82,8 @@ def register_user(email, password):
 
 
 def login_user(email, password):
+    if not isinstance(email, str) or not isinstance(password, str):
+        return None, "invalid_credentials", None
     email_norm = (email or "").strip().lower()
     if not email_norm or not password:
         return None, "invalid_credentials", None

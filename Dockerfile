@@ -34,9 +34,9 @@ EXPOSE 8080
 ENV PORT=8080
 ENV FLASK_ENV=production
 
-# Health check
+# Health check (uses Python because the slim image does not include curl)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"
 
 # Run the application
 CMD ["python", "app.py"]

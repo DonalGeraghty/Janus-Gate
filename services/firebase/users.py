@@ -1,4 +1,5 @@
 from firebase_admin import firestore
+from google.api_core.exceptions import AlreadyExists
 
 from . import db_state
 from .core import normalize_user_email
@@ -13,9 +14,7 @@ def create_user_record(email, password_hash):
     if db_state.users_collection_ref:
         try:
             doc_ref = db_state.users_collection_ref.document(email_key)
-            if doc_ref.get().exists:
-                return False, "exists"
-            doc_ref.set({
+            doc_ref.create({
                 "email": email_key,
                 "password_hash": password_hash,
                 "created_at": firestore.SERVER_TIMESTAMP,
@@ -26,19 +25,15 @@ def create_user_record(email, password_hash):
                 "status": "success",
             })
             return True, None
+        except AlreadyExists:
+            return False, "exists"
         except Exception as e:
-            logger.error("Firestore user create failed, using memory", extra={
+            logger.error("Firestore user create failed", extra={
                 "operation": "create_user_record",
                 "error": str(e),
-                "status": "fallback",
+                "status": "failed",
             })
-            if email_key in db_state.auth_users_memory:
-                return False, "exists"
-            db_state.auth_users_memory[email_key] = {
-                "email": email_key,
-                "password_hash": password_hash,
-            }
-            return True, None
+            return False, "database_error"
 
     if email_key in db_state.auth_users_memory:
         return False, "exists"
@@ -79,16 +74,8 @@ def get_user_record(email):
 
 
 def _clear_user_memory(email_key):
-    """Remove all in-memory rows for a user (used when deleting account or syncing with Firestore delete)."""
+    """Remove the in-memory user record."""
     db_state.auth_users_memory.pop(email_key, None)
-    db_state.habit_memory.pop(email_key, None)
-    db_state.custom_habits_memory.pop(email_key, None)
-    db_state.habit_categories_memory.pop(email_key, None)
-    db_state.todo_memory.pop(email_key, None)
-    db_state.flashcards_memory.pop(email_key, None)
-    db_state.day_planner_options_memory.pop(email_key, None)
-    db_state.day_planner_daily_memory.pop(email_key, None)
-    db_state.meal_plan_daily_memory.pop(email_key, None)
 
 
 def delete_user_account(email):

@@ -11,14 +11,3 @@ users_collection_ref = None
 
 # In-memory fallback stores
 auth_users_memory = {}
-habit_memory = {}
-custom_habits_memory = {}
-habit_categories_memory = {}
-todo_memory = {}
-flashcards_memory = {}
-day_planner_options_memory = {}
-day_planner_daily_memory = {}
-meal_plan_daily_memory = {}
-goals_memory = {}
-sleep_memory = {}
-achievements_memory = {}
