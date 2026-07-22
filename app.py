@@ -40,7 +40,23 @@ from services.openai_service import (
 
 logger = get_flask_app_logger()
 app = Flask(__name__)
-CORS(app)
+
+allowed_origins = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CORS_ALLOWED_ORIGINS", "https://donalgeraghty.github.io"
+    ).split(",")
+    if origin.strip()
+]
+if os.environ.get("FLASK_ENV", "development").lower() != "production":
+    allowed_origins.extend(["http://localhost:5173", "http://127.0.0.1:5173"])
+
+CORS(
+    app,
+    resources={r"/api/*": {"origins": allowed_origins}},
+    allow_headers=["Authorization", "Content-Type"],
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+)
 
 
 def _bearer_token():
