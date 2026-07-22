@@ -179,6 +179,8 @@ Run these commands in Google Cloud Shell. They are written so the work can be re
 | `POST` | `/api/nutrition/analyze` | `{ "message" }` | Use the current user's key to estimate food items, portions, calories, and protein. Does not save anything. |
 | `POST` | `/api/nutrition/entries` | `{ "items", "eaten_at?", "source_message?" }` | Save a reviewed nutrition entry. |
 | `GET` | `/api/nutrition/entries` | — | List entries. Supports `date=YYYY-MM-DD` (UTC) and `limit=1..100`. |
+| `DELETE` | `/api/nutrition/entries/{entry_id}` | — | Delete one nutrition entry owned by the current user. |
+| `PUT` | `/api/nutrition/entries/{entry_id}` | `{ "items", "eaten_at", "source_message?" }` | Replace one owned nutrition entry and recalculate its totals. |
 | `GET` | `/health` | — | Service and database status. |
 
 Passwords are stored as Werkzeug hashes rather than plaintext. JWTs expire after seven days.

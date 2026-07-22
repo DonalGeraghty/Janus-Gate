@@ -112,6 +112,78 @@ class NutritionApiTests(unittest.TestCase):
         response = self.client.get("/api/nutrition/entries", headers=second_headers)
         self.assertEqual(response.get_json()["entries"], [])
 
+    def test_entry_delete_removes_only_the_owners_record(self):
+        first_headers = self.register("first@example.com")
+        created = self.client.post(
+            "/api/nutrition/entries",
+            headers=first_headers,
+            json={"items": SAMPLE_ANALYSIS["items"]},
+        ).get_json()["entry"]
+
+        second_headers = self.register("second@example.com")
+        response = self.client.delete(
+            f"/api/nutrition/entries/{created['id']}", headers=second_headers
+        )
+        self.assertEqual(response.status_code, 404)
+
+        response = self.client.delete(
+            f"/api/nutrition/entries/{created['id']}", headers=first_headers
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.client.get(
+                "/api/nutrition/entries", headers=first_headers
+            ).get_json()["entries"],
+            [],
+        )
+        self.assertEqual(
+            self.client.delete(
+                f"/api/nutrition/entries/{created['id']}", headers=first_headers
+            ).status_code,
+            404,
+        )
+
+    def test_entry_update_recalculates_totals_and_checks_ownership(self):
+        first_headers = self.register("first@example.com")
+        created = self.client.post(
+            "/api/nutrition/entries",
+            headers=first_headers,
+            json={"items": SAMPLE_ANALYSIS["items"]},
+        ).get_json()["entry"]
+        replacement = {
+            "items": [
+                {
+                    "food": "Greek yoghurt",
+                    "portion": "200 g",
+                    "calories": 150,
+                    "protein_g": 20,
+                }
+            ],
+            "eaten_at": "2026-07-22T09:30:00Z",
+        }
+
+        second_headers = self.register("second@example.com")
+        self.assertEqual(
+            self.client.put(
+                f"/api/nutrition/entries/{created['id']}",
+                headers=second_headers,
+                json=replacement,
+            ).status_code,
+            404,
+        )
+
+        response = self.client.put(
+            f"/api/nutrition/entries/{created['id']}",
+            headers=first_headers,
+            json=replacement,
+        )
+        self.assertEqual(response.status_code, 200)
+        entry = response.get_json()["entry"]
+        self.assertEqual(entry["total_calories"], 150)
+        self.assertEqual(entry["total_protein_g"], 20.0)
+        self.assertEqual(entry["items"][0]["food"], "Greek yoghurt")
+        self.assertIsNotNone(entry["updated_at"])
+
     def test_invalid_entry_and_date_are_rejected(self):
         headers = self.register()
         self.assertEqual(

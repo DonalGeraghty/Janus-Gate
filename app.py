@@ -12,6 +12,7 @@ from core.auth_service import decode_access_token, login_user, register_user, ve
 from core.nutrition_service import NutritionEntryInput
 from services.firebase_service import (
     create_nutrition_entry,
+    delete_nutrition_entry,
     delete_openai_credential,
     delete_user_account,
     get_database_status,
@@ -20,6 +21,7 @@ from services.firebase_service import (
     get_user_record,
     list_nutrition_entries,
     save_openai_credential,
+    update_nutrition_entry,
 )
 from services.credential_service import (
     CredentialConfigurationError,
@@ -354,6 +356,51 @@ def nutrition_entries_list():
     return jsonify(status="success", entries=entries)
 
 
+@app.delete("/api/nutrition/entries/<entry_id>")
+def nutrition_entry_delete(entry_id):
+    email = _authenticated_user_email()
+    if not email:
+        return jsonify(status="error", error="Unauthorized"), 401
+
+    deleted, error = delete_nutrition_entry(email, entry_id)
+    if error == "invalid_entry_id":
+        return jsonify(status="error", error="Invalid nutrition entry ID"), 400
+    if error == "not_found":
+        return jsonify(status="error", error="Nutrition entry not found"), 404
+    if not deleted:
+        logger.error("Nutrition entry delete failed for %s: %s", email, error)
+        return jsonify(status="error", error="Could not delete nutrition entry"), 500
+    return jsonify(status="success")
+
+
+@app.put("/api/nutrition/entries/<entry_id>")
+def nutrition_entry_update(entry_id):
+    email = _authenticated_user_email()
+    if not email:
+        return jsonify(status="error", error="Unauthorized"), 401
+
+    try:
+        entry_input = NutritionEntryInput.model_validate(request.get_json(silent=True) or {})
+    except ValidationError:
+        return jsonify(status="error", error="Invalid nutrition entry"), 400
+
+    updated, error, entry = update_nutrition_entry(
+        email,
+        entry_id,
+        [item.model_dump() for item in entry_input.items],
+        entry_input.eaten_at,
+        entry_input.source_message,
+    )
+    if error == "invalid_entry_id":
+        return jsonify(status="error", error="Invalid nutrition entry ID"), 400
+    if error == "not_found":
+        return jsonify(status="error", error="Nutrition entry not found"), 404
+    if not updated:
+        logger.error("Nutrition entry update failed for %s: %s", email, error)
+        return jsonify(status="error", error="Could not update nutrition entry"), 500
+    return jsonify(status="success", entry=entry)
+
+
 @app.get("/health")
 def health_check():
     return jsonify(status="healthy", database=get_database_status())
@@ -374,6 +421,8 @@ def root():
             "analyze_meal": "POST /api/nutrition/analyze",
             "create_nutrition_entry": "POST /api/nutrition/entries",
             "list_nutrition_entries": "GET /api/nutrition/entries",
+            "delete_nutrition_entry": "DELETE /api/nutrition/entries/{entry_id}",
+            "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}",
             "health": "GET /health",
         },
     )
