@@ -3,6 +3,8 @@ from google.api_core.exceptions import AlreadyExists
 
 from . import db_state
 from .core import normalize_user_email
+from .nutrition import delete_nutrition_entries
+from .openai_credentials import delete_openai_credential
 from ..logging_service import logger
 
 
@@ -76,6 +78,7 @@ def get_user_record(email):
 def _clear_user_memory(email_key):
     """Remove the in-memory user record."""
     db_state.auth_users_memory.pop(email_key, None)
+    db_state.nutrition_entries_memory.pop(email_key, None)
 
 
 def delete_user_account(email):
@@ -86,6 +89,13 @@ def delete_user_account(email):
     email_key = normalize_user_email(email)
     if not email_key:
         return False, "invalid_email"
+
+    credential_deleted, _ = delete_openai_credential(email_key)
+    if not credential_deleted:
+        return False, "delete_failed"
+
+    if not delete_nutrition_entries(email_key):
+        return False, "delete_failed"
 
     if db_state.users_collection_ref:
         try:

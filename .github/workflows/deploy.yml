@@ -37,6 +37,12 @@ jobs:
           python -c "from services.logging_service import logger; print('✅ Logging service imports successful')"
           python -c "from core.auth_service import register_user, login_user; print('✅ Auth service imports successful')"
           python -c "from app import app; print('✅ Flask app imports successful')"
+
+      - name: Run tests
+        env:
+          FLASK_ENV: development
+          JWT_SECRET_KEY: test-secret
+        run: python -m unittest discover -s tests -v
       
       - name: Google Auth
         id: auth
@@ -59,6 +65,7 @@ jobs:
           gcloud services enable run.googleapis.com
           gcloud services enable firestore.googleapis.com
           gcloud services enable cloudbuild.googleapis.com
+          gcloud services enable cloudkms.googleapis.com
           
       - name: Create service account if not exists
         run: |
@@ -88,7 +95,7 @@ jobs:
             --cpu 1 \
             --max-instances 10 \
             --timeout 300 \
-            --set-env-vars "FLASK_ENV=production,JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}"
+            --set-env-vars "FLASK_ENV=production,JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }},OPENAI_MODEL=gpt-5.6,OPENAI_KMS_KEY_NAME=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/keyRings/janus-gate/cryptoKeys/user-openai-keys"
             
       - name: Get service URL
         id: service-url

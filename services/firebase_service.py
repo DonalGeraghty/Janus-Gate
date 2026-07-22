@@ -6,4 +6,10 @@ from .firebase import (
     create_user_record,
     get_user_record,
     delete_user_account,
+    create_nutrition_entry,
+    list_nutrition_entries,
+    delete_openai_credential,
+    get_openai_credential,
+    get_openai_credential_status,
+    save_openai_credential,
 )
