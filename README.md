@@ -49,7 +49,7 @@ This section records the current Google Cloud state and remaining setup work so 
 | Full KMS resource | `projects/donal-geraghty-home/locations/europe-west1/keyRings/janus-gate/cryptoKeys/user-openai-keys` |
 | OpenAI model | `gpt-5.6` |
 
-Production CORS is restricted to `https://donalgeraghty.github.io`. Local development also permits Vite on `http://localhost:5173` and `http://127.0.0.1:5173`. Additional production origins can be supplied as a comma-separated `CORS_ALLOWED_ORIGINS` value.
+Production CORS is restricted to the deployed NyxAI Cloud Run origin, `https://minerva-965419436472.europe-west1.run.app`. Local development also permits Vite on `http://localhost:5173` and `http://127.0.0.1:5173`. Additional production origins can be supplied as a comma-separated `CORS_ALLOWED_ORIGINS` value.
 
 ### Confirmed Google Cloud state
 
