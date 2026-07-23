@@ -1,195 +1,134 @@
 # Janus Gate
 
-A small Flask API for user authentication and AI-assisted nutrition logging. Each user supplies their own OpenAI API key. The key is encrypted with Google Cloud KMS before its ciphertext is stored in the user's private Firestore subcollection.
+Janus Gate is the backend API for [Nyx AI](https://github.com/DonalGeraghty/NyxAI). It provides account authentication, per-user encrypted OpenAI credentials, structured meal analysis, and user-scoped nutrition storage.
 
-## Setup
+## Responsibilities
 
-Requirements: Python 3.11+, a Firestore-enabled Google Cloud project, a symmetric Cloud KMS key, and a strong `JWT_SECRET_KEY`.
+- Register users and issue seven-day JWT access tokens
+- Store password hashes rather than plaintext passwords
+- Verify user-supplied OpenAI API keys
+- Encrypt OpenAI keys with Google Cloud KMS before persistence
+- Analyze meal descriptions with structured OpenAI responses
+- Create, list, update, and delete user-owned nutrition entries
+- Delete credentials and nutrition data when an account is removed
+- Expose health and database-status endpoints for deployment checks
+
+## Architecture
+
+```text
+Nyx AI or another API client
+  └─ Janus Gate (Flask)
+       ├─ Firestore
+       │    ├─ users/{email}
+       │    ├─ users/{email}/nutrition_entries/{entry}
+       │    └─ users/{email}/private/openai
+       ├─ Google Cloud KMS
+       │    └─ encrypts and decrypts each user's OpenAI key
+       └─ OpenAI Responses API
+            └─ validates keys and returns structured meal analysis
+```
+
+## Tech stack
+
+- Python 3.11
+- Flask and Flask-CORS
+- Pydantic
+- PyJWT
+- Firebase Admin and Google Cloud Firestore
+- Google Cloud KMS
+- OpenAI Python SDK
+
+## Local development
+
+### Requirements
+
+- Python 3.11 or newer
+- A Firestore-enabled Google Cloud project for persistent data
+- A symmetric Cloud KMS key for OpenAI credential storage
+- Google Application Default Credentials or a service-account credential
+
+Create a virtual environment and install the dependencies:
+
+```bash
+python -m venv .venv
+python -m pip install -r requirements.txt
+```
+
+Activate the environment before running commands:
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-$env:FLASK_ENV = "development"
-$env:JWT_SECRET_KEY = "dev-secret"
-$env:OPENAI_KMS_KEY_NAME = "projects/PROJECT_ID/locations/REGION/keyRings/janus-gate/cryptoKeys/user-openai-keys"
+# PowerShell
+.\.venv\Scripts\Activate.ps1
+```
+
+```bash
+# macOS or Linux
+source .venv/bin/activate
+```
+
+Create a local `.env` file:
+
+```dotenv
+FLASK_ENV=development
+JWT_SECRET_KEY=replace-with-a-long-random-secret
+OPENAI_MODEL=gpt-5.6
+OPENAI_KMS_KEY_NAME=projects/PROJECT_ID/locations/REGION/keyRings/janus-gate/cryptoKeys/user-openai-keys
+
+# Optional when Application Default Credentials are not available:
+# GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+
+# Optional; defaults to 5000:
+# PORT=5000
+
+# Optional; otherwise JWT_SECRET_KEY is used:
+# OPENAI_SAFETY_SALT=replace-with-an-independent-random-secret
+```
+
+Start the API:
+
+```bash
 python app.py
 ```
 
-The server listens on `PORT`, defaulting to `5000`.
+The server listens on `http://localhost:5000` unless `PORT` is set.
 
-For local development outside Google Cloud, use Application Default Credentials with access to Firestore and the KMS key. Authentication and nutrition entries can fall back to memory when Firestore is unavailable; API-key storage deliberately fails closed and has no plaintext or in-memory fallback.
+When Firestore is unavailable, local authentication and nutrition operations fall back to process memory. That data disappears when the server restarts. OpenAI credential storage deliberately has no plaintext or in-memory fallback: Firestore or KMS failures cause those operations to fail closed.
 
-## BYOK deployment handoff
+## Authentication
 
-This section records the current Google Cloud state and remaining setup work so the deployment can be resumed in a later session.
+Register or log in to receive a JWT, then supply it to protected endpoints:
 
-### Architecture and key handling
+```http
+Authorization: Bearer <token>
+```
 
-- Each user supplies their own OpenAI API key through `PUT /api/user/openai-key`.
-- The backend makes a small OpenAI request to verify the key before replacing a stored credential.
-- The plaintext key is encrypted by Google Cloud KMS. Only ciphertext, the last four characters, and timestamps are written to Firestore.
-- Credentials are stored at `users/{normalized_email}/private/openai`.
-- KMS additional authenticated data includes the normalized email, so one user's ciphertext cannot be decrypted as another user.
-- Plaintext is decrypted only in the backend for an OpenAI request. It is never returned by the API or intentionally written to Firestore or logs.
-- There is no plaintext or in-memory credential fallback. If Firestore or KMS is unavailable, key operations fail closed.
-- Deleting an account also deletes its encrypted OpenAI credential and nutrition entries.
-- Cloud Run does not need a shared `OPENAI_API_KEY`; the deployment workflow no longer reads one.
-
-### Project configuration
-
-| Setting | Value |
-| --- | --- |
-| Google Cloud project | `donal-geraghty-home` |
-| Region | `europe-west1` |
-| Cloud Run service | `janus-gate` |
-| Runtime service account | `janus-gate@donal-geraghty-home.iam.gserviceaccount.com` |
-| KMS key ring | `janus-gate` |
-| KMS key | `user-openai-keys` |
-| Full KMS resource | `projects/donal-geraghty-home/locations/europe-west1/keyRings/janus-gate/cryptoKeys/user-openai-keys` |
-| OpenAI model | `gpt-5.6` |
-
-Janus permits cross-origin browser access to `/api/*` from any origin so deployed, local, and preview NyxAI clients can use the public API. Protected endpoints still require a valid bearer JWT, and CORS methods and headers remain restricted. This wildcard policy is compatible with the current header-based authentication; replace it with a strict origin allowlist before adopting cross-site authentication cookies.
-
-### Confirmed Google Cloud state
-
-On 2026-07-22, the default Firestore database was confirmed to exist:
-
-- Database: `projects/donal-geraghty-home/databases/(default)`
-- Type: `FIRESTORE_NATIVE`
-- Edition: `STANDARD`
-- Location: `europe-west1`
-- Realtime updates: enabled
-- Created: `2025-08-30T19:01:36.093529Z`
-
-Do not create another Firestore database. The next setup task is Cloud KMS.
-
-### Remaining Google Cloud steps
-
-Run these commands in Google Cloud Shell. They are written so the work can be resumed from a fresh login.
-
-1. Select the project:
-
-   ```bash
-   gcloud config set project donal-geraghty-home
-   ```
-
-2. Enable the required APIs:
-
-   ```bash
-   gcloud services enable \
-     cloudkms.googleapis.com \
-     firestore.googleapis.com \
-     run.googleapis.com \
-     cloudbuild.googleapis.com
-   ```
-
-3. Create the KMS key ring. This command is only needed once:
-
-   ```bash
-   gcloud kms keyrings create janus-gate \
-     --location=europe-west1
-   ```
-
-   If it already exists, verify it instead:
-
-   ```bash
-   gcloud kms keyrings describe janus-gate \
-     --location=europe-west1
-   ```
-
-4. Create the symmetric encryption key. This is also only needed once:
-
-   ```bash
-   gcloud kms keys create user-openai-keys \
-     --keyring=janus-gate \
-     --location=europe-west1 \
-     --purpose=encryption \
-     --protection-level=software \
-     --rotation-period=90d \
-     --next-rotation-time=2026-10-20T00:00:00Z
-   ```
-
-5. Confirm the key exists:
-
-   ```bash
-   gcloud kms keys describe user-openai-keys \
-     --keyring=janus-gate \
-     --location=europe-west1
-   ```
-
-6. Confirm the Cloud Run runtime service account exists:
-
-   ```bash
-   gcloud iam service-accounts describe \
-     janus-gate@donal-geraghty-home.iam.gserviceaccount.com
-   ```
-
-   Create it only if the describe command reports that it does not exist:
-
-   ```bash
-   gcloud iam service-accounts create janus-gate \
-     --display-name="Janus Gate API"
-   ```
-
-7. Grant that service account encryption and decryption access to this key only:
-
-   ```bash
-   gcloud kms keys add-iam-policy-binding user-openai-keys \
-     --keyring=janus-gate \
-     --location=europe-west1 \
-     --member="serviceAccount:janus-gate@donal-geraghty-home.iam.gserviceaccount.com" \
-     --role="roles/cloudkms.cryptoKeyEncrypterDecrypter"
-   ```
-
-8. Commit and push the repository changes to `main` or `master`. GitHub Actions will deploy Cloud Run with:
-
-   ```text
-   OPENAI_KMS_KEY_NAME=projects/donal-geraghty-home/locations/europe-west1/keyRings/janus-gate/cryptoKeys/user-openai-keys
-   OPENAI_MODEL=gpt-5.6
-   ```
-
-9. After a successful BYOK deployment, remove the obsolete `OPENAI_API_KEY` from GitHub **Settings > Secrets and variables > Actions**, if it exists, and revoke the old shared key in the OpenAI dashboard. Keep `JWT_SECRET_KEY` and `GCP_SA_KEY`.
-
-### Resume checklist
-
-- [x] Default Firestore database exists in `europe-west1`.
-- [x] BYOK endpoints and encrypted persistence are implemented.
-- [x] Cloud Run workflow uses `OPENAI_KMS_KEY_NAME` instead of a shared OpenAI key.
-- [x] Automated test suite passes (20 tests as of 2026-07-22).
-- [ ] Cloud KMS API enabled.
-- [ ] `janus-gate` key ring created.
-- [ ] `user-openai-keys` encryption key created.
-- [ ] Runtime service account granted `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the key.
-- [ ] Changes committed and deployed.
-- [ ] BYOK credential and nutrition endpoints tested against Cloud Run.
-- [ ] Obsolete shared OpenAI key removed and revoked.
+Passwords must contain at least eight characters. JWTs use HS256 and expire after seven days.
 
 ## API
 
-| Method | Path | Body | Description |
+| Method | Path | Authentication | Purpose |
 | --- | --- | --- | --- |
-| `POST` | `/api/auth/register` | `{ "email", "password" }` | Create a user and return a JWT. Passwords require at least 8 characters. |
-| `POST` | `/api/auth/login` | `{ "email", "password" }` | Log in and return a JWT. |
-| `GET` | `/api/auth/me` | — | Return the current user. Requires `Authorization: Bearer <JWT>`. |
-| `DELETE` | `/api/auth/account` | `{ "password" }` | Delete the current user. Requires a bearer JWT and password confirmation. |
-| `PUT` | `/api/user/openai-key` | `{ "api_key" }` | Verify, encrypt, and save the current user's OpenAI key. |
-| `GET` | `/api/user/openai-key` | — | Return only key status, last four characters, and timestamps. |
-| `DELETE` | `/api/user/openai-key` | — | Delete the current user's stored OpenAI key. |
-| `POST` | `/api/nutrition/analyze` | `{ "message" }` | Use the current user's key to estimate food items, portions, calories, and protein. Does not save anything. |
-| `POST` | `/api/nutrition/entries` | `{ "items", "eaten_at?", "source_message?" }` | Save a reviewed nutrition entry. |
-| `GET` | `/api/nutrition/entries` | — | List entries. Supports `date=YYYY-MM-DD` (UTC) and `limit=1..100`. |
-| `DELETE` | `/api/nutrition/entries/{entry_id}` | — | Delete one nutrition entry owned by the current user. |
-| `PUT` | `/api/nutrition/entries/{entry_id}` | `{ "items", "eaten_at", "source_message?" }` | Replace one owned nutrition entry and recalculate its totals. |
-| `GET` | `/health` | — | Service and database status. |
+| `POST` | `/api/auth/register` | No | Create an account and return a JWT |
+| `POST` | `/api/auth/login` | No | Authenticate and return a JWT |
+| `GET` | `/api/auth/me` | Bearer JWT | Return the current user |
+| `DELETE` | `/api/auth/account` | Bearer JWT | Delete the account after password confirmation |
+| `PUT` | `/api/user/openai-key` | Bearer JWT | Verify, encrypt, and store an OpenAI API key |
+| `GET` | `/api/user/openai-key` | Bearer JWT | Return safe credential-status metadata |
+| `DELETE` | `/api/user/openai-key` | Bearer JWT | Remove the stored credential |
+| `POST` | `/api/nutrition/analyze` | Bearer JWT | Analyze a meal without saving it |
+| `POST` | `/api/nutrition/entries` | Bearer JWT | Save a reviewed nutrition entry |
+| `GET` | `/api/nutrition/entries` | Bearer JWT | List entries, optionally filtered by date |
+| `PUT` | `/api/nutrition/entries/{entry_id}` | Bearer JWT | Replace an owned entry and recalculate totals |
+| `DELETE` | `/api/nutrition/entries/{entry_id}` | Bearer JWT | Delete an owned entry |
+| `GET` | `/health` | No | Return service and database status |
+| `GET` | `/` | No | List the available endpoints |
 
-Passwords are stored as Werkzeug hashes rather than plaintext. JWTs expire after seven days.
+The entries list accepts:
 
-Saving a key performs one small OpenAI request to verify it before replacing any existing credential. Nutrition analysis uses `OPENAI_MODEL`, which defaults to `gpt-5.6`. Results are estimates and should be reviewed before they are sent to the entries endpoint. The server recalculates totals from the confirmed food items.
+- `date=YYYY-MM-DD` to select one UTC calendar day
+- `limit=1..100`, defaulting to `50`
 
-The plaintext key is used only for the outgoing OpenAI request. It is never returned by the API or written to Firestore or application logs. Decryption is bound to the owning user's normalized email with KMS additional authenticated data. Deleting an account also deletes its encrypted OpenAI credential and nutrition entries.
-
-Example confirmed entry:
+### Example nutrition entry
 
 ```json
 {
@@ -206,12 +145,82 @@ Example confirmed entry:
 }
 ```
 
+The API recalculates total calories and protein from the submitted items. Meal analysis is an estimate and is not saved automatically.
+
+## OpenAI credential security
+
+- Each user supplies their own OpenAI API key.
+- A small OpenAI request verifies the key before an existing credential is replaced.
+- The plaintext key is encrypted with Cloud KMS and is never returned by the API.
+- Firestore stores only ciphertext, the last four characters, and timestamps.
+- KMS additional authenticated data includes the normalized user email, binding ciphertext to its owner.
+- The plaintext key is decrypted only when Janus Gate makes an OpenAI request.
+- Credential operations fail closed if Firestore or KMS is unavailable.
+- Account deletion removes the encrypted credential and all nutrition entries.
+
+Protected data is scoped through the authenticated email. The API currently allows cross-origin requests to `/api/*` from any origin while restricting methods and headers. Replace the wildcard with an origin allowlist before moving to cookie-based authentication.
+
+## Tests
+
+Run the complete test suite:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The tests cover authentication, ownership isolation, nutrition CRUD, deterministic total calculation, API-key lifecycle behavior, and KMS user binding.
+
 ## Docker
+
+Build and run the production image:
 
 ```bash
 docker build -t janus-gate .
-docker run -p 8080:8080 \
-  -e JWT_SECRET_KEY=your-secret \
+docker run --rm -p 8080:8080 \
+  -e JWT_SECRET_KEY=replace-with-a-long-random-secret \
+  -e OPENAI_MODEL=gpt-5.6 \
   -e OPENAI_KMS_KEY_NAME=projects/PROJECT_ID/locations/REGION/keyRings/janus-gate/cryptoKeys/user-openai-keys \
   janus-gate
 ```
+
+The container runs as a non-root user, listens on port `8080`, and checks `/health`.
+
+## Google Cloud deployment
+
+The workflow in [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) tests the application and deploys it from source to Google Cloud Run in `europe-west1`.
+
+Configure these GitHub Actions secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `GCP_SA_KEY` | Authenticates the deployment workflow to Google Cloud |
+| `JWT_SECRET_KEY` | Signs production JWTs |
+
+The Cloud Run runtime service account needs:
+
+- Firestore access for users, credentials, and nutrition entries
+- `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the configured KMS key
+
+The deployment sets `OPENAI_MODEL` and `OPENAI_KMS_KEY_NAME`. A shared `OPENAI_API_KEY` is not required because every user supplies their own key.
+
+## Project structure
+
+```text
+.
+├── core/
+│   ├── auth_service.py          # Password hashing and JWT handling
+│   └── nutrition_service.py     # Nutrition-entry validation
+├── services/
+│   ├── firebase/                # Firestore persistence by data type
+│   ├── credential_service.py    # Cloud KMS encryption and decryption
+│   ├── logging_service.py       # Console logging
+│   └── openai_service.py        # Key verification and meal analysis
+├── tests/                       # Unit and API tests
+├── app.py                       # Flask application and routes
+├── Dockerfile
+└── requirements.txt
+```
+
+## Related project
+
+- [Nyx AI](https://github.com/DonalGeraghty/NyxAI) — React frontend for the Janus Gate API
