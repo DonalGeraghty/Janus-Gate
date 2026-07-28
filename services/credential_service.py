@@ -17,23 +17,32 @@ class CredentialEncryptionError(RuntimeError):
 
 
 def _kms_key_name():
-    key_name = os.environ.get("OPENAI_KMS_KEY_NAME")
+    key_name = os.environ.get("AI_KMS_KEY_NAME") or os.environ.get("OPENAI_KMS_KEY_NAME")
     if not key_name:
-        raise CredentialConfigurationError("OPENAI_KMS_KEY_NAME is not configured")
+        raise CredentialConfigurationError("AI_KMS_KEY_NAME is not configured")
     return key_name
 
 
-def _additional_authenticated_data(email):
-    return f"janus-gate:openai-key:{email.strip().lower()}".encode("utf-8")
+def _additional_authenticated_data(email, provider="openai", aad_version=1):
+    email_key = email.strip().lower()
+    if aad_version in (None, 1):
+        if provider != "openai":
+            raise ValueError("Legacy credential AAD is only valid for OpenAI")
+        return f"janus-gate:openai-key:{email_key}".encode("utf-8")
+    if aad_version == 2:
+        return f"janus-gate:api-key:v2:{email_key}:{provider}".encode("utf-8")
+    raise ValueError("Unsupported credential AAD version")
 
 
-def encrypt_api_key(api_key, email):
+def encrypt_api_key(api_key, email, provider="openai", aad_version=1):
     try:
         response = kms.KeyManagementServiceClient().encrypt(
             request={
                 "name": _kms_key_name(),
                 "plaintext": api_key.encode("utf-8"),
-                "additional_authenticated_data": _additional_authenticated_data(email),
+                "additional_authenticated_data": _additional_authenticated_data(
+                    email, provider, aad_version
+                ),
             }
         )
     except (GoogleAPICallError, GoogleAuthError, ValueError) as error:
@@ -41,14 +50,16 @@ def encrypt_api_key(api_key, email):
     return base64.b64encode(response.ciphertext).decode("ascii")
 
 
-def decrypt_api_key(ciphertext, email):
+def decrypt_api_key(ciphertext, email, provider="openai", aad_version=1):
     try:
         ciphertext_bytes = base64.b64decode(ciphertext, validate=True)
         response = kms.KeyManagementServiceClient().decrypt(
             request={
                 "name": _kms_key_name(),
                 "ciphertext": ciphertext_bytes,
-                "additional_authenticated_data": _additional_authenticated_data(email),
+                "additional_authenticated_data": _additional_authenticated_data(
+                    email, provider, aad_version
+                ),
             }
         )
         return response.plaintext.decode("utf-8")

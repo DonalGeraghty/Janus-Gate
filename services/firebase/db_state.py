@@ -1,4 +1,5 @@
 import re
+from threading import RLock
 
 # Shared regex validators
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -12,3 +13,4 @@ users_collection_ref = None
 # In-memory fallback stores
 auth_users_memory = {}
 nutrition_entries_memory = {}
+memory_lock = RLock()

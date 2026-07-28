@@ -15,7 +15,9 @@ from openai import (
     PermissionDeniedError,
     RateLimitError,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from .ai_errors import AIAuthenticationError, AIRateLimitError, AIServiceError
 
 
 MAX_MEAL_MESSAGE_LENGTH = 2000
@@ -58,15 +60,15 @@ class MealRecommendation(BaseModel):
     assumptions: list[str] = Field(max_length=10)
 
 
-class OpenAIAuthenticationError(RuntimeError):
+class OpenAIAuthenticationError(AIAuthenticationError):
     pass
 
 
-class OpenAIRateLimitError(RuntimeError):
+class OpenAIRateLimitError(AIRateLimitError):
     pass
 
 
-class OpenAIServiceError(RuntimeError):
+class OpenAIServiceError(AIServiceError):
     pass
 
 
@@ -104,7 +106,11 @@ def _raise_mapped_openai_error(error):
     raise OpenAIServiceError("OpenAI request failed") from error
 
 
-def validate_api_key(api_key, email):
+def _model_name(model=None):
+    return model or os.environ.get("OPENAI_MODEL", "gpt-5.6-sol")
+
+
+def validate_api_key(api_key, email, model=None):
     if not isinstance(api_key, str):
         raise ValueError("invalid_api_key")
     api_key = api_key.strip()
@@ -113,7 +119,7 @@ def validate_api_key(api_key, email):
 
     try:
         OpenAI(api_key=api_key).responses.create(
-            model=os.environ.get("OPENAI_MODEL", "gpt-5.6"),
+            model=_model_name(model),
             input="Reply only with OK.",
             max_output_tokens=16,
             reasoning={"effort": "none"},
@@ -127,12 +133,15 @@ def validate_api_key(api_key, email):
         APIConnectionError,
         APITimeoutError,
         APIStatusError,
+        ValidationError,
+        json.JSONDecodeError,
+        TypeError,
     ) as error:
         _raise_mapped_openai_error(error)
     return api_key
 
 
-def analyze_meal(message, email, api_key):
+def analyze_meal(message, email, api_key, model=None):
     if not isinstance(message, str) or not message.strip():
         raise ValueError("message_required")
     message = message.strip()
@@ -141,7 +150,7 @@ def analyze_meal(message, email, api_key):
 
     try:
         response = OpenAI(api_key=api_key).responses.parse(
-            model=os.environ.get("OPENAI_MODEL", "gpt-5.6"),
+            model=_model_name(model),
             input=[
                 {"role": "system", "content": MEAL_ANALYSIS_PROMPT},
                 {"role": "user", "content": message},
@@ -158,6 +167,9 @@ def analyze_meal(message, email, api_key):
         APIConnectionError,
         APITimeoutError,
         APIStatusError,
+        ValidationError,
+        json.JSONDecodeError,
+        TypeError,
     ) as error:
         _raise_mapped_openai_error(error)
 
@@ -174,7 +186,7 @@ def analyze_meal(message, email, api_key):
     return result
 
 
-def recommend_meals(context, email, api_key):
+def recommend_meals(context, email, api_key, model=None):
     prompt_context = {
         "calories_eaten_today": context.current_calories,
         "protein_eaten_today_g": context.current_protein_g,
@@ -192,7 +204,7 @@ def recommend_meals(context, email, api_key):
 
     try:
         response = OpenAI(api_key=api_key).responses.parse(
-            model=os.environ.get("OPENAI_MODEL", "gpt-5.6"),
+            model=_model_name(model),
             input=[
                 {"role": "system", "content": MEAL_RECOMMENDATION_PROMPT},
                 {"role": "user", "content": json.dumps(prompt_context)},
@@ -209,6 +221,9 @@ def recommend_meals(context, email, api_key):
         APIConnectionError,
         APITimeoutError,
         APIStatusError,
+        ValidationError,
+        json.JSONDecodeError,
+        TypeError,
     ) as error:
         _raise_mapped_openai_error(error)
 

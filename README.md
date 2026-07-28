@@ -1,14 +1,15 @@
 # Janus Gate
 
-Janus Gate is the backend API for [Nyx AI](https://github.com/DonalGeraghty/NyxAI). It provides account authentication, per-user encrypted OpenAI credentials, structured meal analysis, and user-scoped nutrition storage.
+Janus Gate is the backend API for [Nyx AI](https://github.com/DonalGeraghty/NyxAI). It provides account authentication, per-user encrypted OpenAI and Mistral AI credentials, selectable AI models, structured meal analysis, and user-scoped nutrition storage.
 
 ## Responsibilities
 
 - Register users and issue seven-day JWT access tokens
 - Store password hashes rather than plaintext passwords
-- Verify user-supplied OpenAI API keys
-- Encrypt OpenAI keys with Google Cloud KMS before persistence
-- Analyze meal descriptions with structured OpenAI responses
+- Verify user-supplied OpenAI and Mistral AI API keys
+- Encrypt provider keys with Google Cloud KMS before persistence
+- Persist each user's selected provider and model
+- Analyze meal descriptions with structured responses from the selected model
 - Create, list, update, and delete user-owned nutrition entries
 - Generate structured meal recommendations from today's calorie and protein progress
 - Delete credentials and nutrition data when an account is removed
@@ -22,11 +23,12 @@ Nyx AI or another API client
        ├─ Firestore
        │    ├─ users/{email}
        │    ├─ users/{email}/nutrition_entries/{entry}
-       │    └─ users/{email}/private/openai
+       │    ├─ users/{email}/private/openai
+       │    └─ users/{email}/private/mistral
        ├─ Google Cloud KMS
-       │    └─ encrypts and decrypts each user's OpenAI key
-       └─ OpenAI Responses API
-            └─ validates keys and returns structured meal analysis
+       │    └─ encrypts and decrypts each provider key
+       ├─ OpenAI Responses API
+       └─ Mistral AI Chat API
 ```
 
 ## Tech stack
@@ -37,7 +39,7 @@ Nyx AI or another API client
 - PyJWT
 - Firebase Admin and Google Cloud Firestore
 - Google Cloud KMS
-- OpenAI Python SDK
+- OpenAI and Mistral AI Python SDKs
 
 ## Local development
 
@@ -45,7 +47,7 @@ Nyx AI or another API client
 
 - Python 3.11 or newer
 - A Firestore-enabled Google Cloud project for persistent data
-- A symmetric Cloud KMS key for OpenAI credential storage
+- A symmetric Cloud KMS key for AI credential storage
 - Google Application Default Credentials or a service-account credential
 
 Create a virtual environment and install the dependencies:
@@ -72,8 +74,9 @@ Create a local `.env` file:
 ```dotenv
 FLASK_ENV=development
 JWT_SECRET_KEY=replace-with-a-long-random-secret
-OPENAI_MODEL=gpt-5.6
-OPENAI_KMS_KEY_NAME=projects/PROJECT_ID/locations/REGION/keyRings/janus-gate/cryptoKeys/user-openai-keys
+OPENAI_MODEL=gpt-5.6-sol
+MISTRAL_MODEL=mistral-small-2603
+AI_KMS_KEY_NAME=projects/PROJECT_ID/locations/REGION/keyRings/janus-gate/cryptoKeys/user-openai-keys
 
 # Optional when Application Default Credentials are not available:
 # GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
@@ -93,7 +96,7 @@ python app.py
 
 The server listens on `http://localhost:5000` unless `PORT` is set.
 
-When Firestore is unavailable, local authentication and nutrition operations fall back to process memory. That data disappears when the server restarts. OpenAI credential storage deliberately has no plaintext or in-memory fallback: Firestore or KMS failures cause those operations to fail closed.
+When Firestore is unavailable, local authentication, profile settings, and nutrition operations fall back to process memory. That data disappears when the server restarts. AI credential storage deliberately has no plaintext or in-memory fallback: Firestore or KMS failures cause those operations to fail closed.
 
 ## Authentication
 
@@ -113,9 +116,12 @@ Passwords must contain at least eight characters. JWTs use HS256 and expire afte
 | `POST` | `/api/auth/login` | No | Authenticate and return a JWT |
 | `GET` | `/api/auth/me` | Bearer JWT | Return the current user |
 | `DELETE` | `/api/auth/account` | Bearer JWT | Delete the account after password confirmation |
-| `PUT` | `/api/user/openai-key` | Bearer JWT | Verify, encrypt, and store an OpenAI API key |
-| `GET` | `/api/user/openai-key` | Bearer JWT | Return safe credential-status metadata |
-| `DELETE` | `/api/user/openai-key` | Bearer JWT | Remove the stored credential |
+| `GET` | `/api/user/ai-settings` | Bearer JWT | Return the selected model, provider catalog, and safe key statuses |
+| `PUT` | `/api/user/ai-settings` | Bearer JWT | Select an allowlisted provider and model |
+| `PUT` | `/api/user/ai-credentials/{provider}` | Bearer JWT | Verify, encrypt, and store that provider's API key |
+| `GET` | `/api/user/ai-credentials/{provider}` | Bearer JWT | Return safe credential-status metadata |
+| `DELETE` | `/api/user/ai-credentials/{provider}` | Bearer JWT | Remove that provider's credential |
+| `PUT/GET/DELETE` | `/api/user/openai-key` | Bearer JWT | Compatibility alias for the OpenAI credential |
 | `POST` | `/api/nutrition/analyze` | Bearer JWT | Analyze a meal without saving it |
 | `POST` | `/api/nutrition/recommend` | Bearer JWT | Recommend meals for the rest of the day |
 | `POST` | `/api/nutrition/entries` | Bearer JWT | Save a reviewed nutrition entry |
@@ -129,6 +135,17 @@ The entries list accepts:
 
 - `date=YYYY-MM-DD` to select one UTC calendar day
 - `limit=1..100`, defaulting to `50`
+
+AI settings accept only these provider/model combinations:
+
+- OpenAI: `gpt-5.6-sol`, `gpt-5.6-terra`, or `gpt-5.6-luna`
+- Mistral AI: `mistral-small-2603`, `mistral-large-2512`, or `mistral-medium-3-5`
+
+Existing users without saved AI settings default to OpenAI and `gpt-5.6-sol`. Selecting a provider does not delete the other provider's key. Analysis and recommendation requests never fall back silently: when the selected provider has no stored key, the API returns `409 provider_key_required`.
+
+Deployments that introduce account generations invalidate older JWTs without an
+`account_id` claim. Existing users must sign in once; a successful password
+login atomically assigns the legacy account an ID and issues a new token.
 
 ### Example nutrition entry
 
@@ -149,16 +166,20 @@ The entries list accepts:
 
 The API recalculates total calories and protein from the submitted items. Meal analysis is an estimate and is not saved automatically.
 
-## OpenAI credential security
+## AI credential security
 
-- Each user supplies their own OpenAI API key.
-- A small OpenAI request verifies the key before an existing credential is replaced.
+- Each user supplies their own OpenAI and/or Mistral AI API key.
+- The selected provider verifies a new key before an existing credential is replaced.
 - The plaintext key is encrypted with Cloud KMS and is never returned by the API.
-- Firestore stores only ciphertext, the last four characters, and timestamps.
-- KMS additional authenticated data includes the normalized user email, binding ciphertext to its owner.
-- The plaintext key is decrypted only when Janus Gate makes an OpenAI request.
+- Firestore stores each provider separately with only ciphertext, the last four characters, version metadata, and timestamps.
+- New KMS additional authenticated data includes the normalized user email and provider, binding ciphertext to both.
+- Legacy OpenAI ciphertext remains decryptable with its original user-bound authenticated data.
+- The plaintext key is decrypted only when Janus Gate calls the selected provider.
 - Credential operations fail closed if Firestore or KMS is unavailable.
-- Account deletion removes the encrypted credential and all nutrition entries.
+- JWTs and guarded data operations carry an immutable account ID, so a token or in-flight request from a deleted account cannot cross into a newly registered account with the same email.
+- Account deletion marks the user first; credential and nutrition writes transactionally require the matching live, non-deleting parent account so concurrent requests cannot recreate orphaned data.
+- Deletion cleanup is idempotent and generation-bound. Failed deletions remain marked for an authenticated retry, and stale markers resume cleanup automatically.
+- Account deletion removes both encrypted provider credentials and all nutrition entries.
 
 Protected data is scoped through the authenticated email. The API currently allows cross-origin requests to `/api/*` from any origin while restricting methods and headers. Replace the wildcard with an origin allowlist before moving to cookie-based authentication.
 
@@ -170,7 +191,7 @@ Run the complete test suite:
 python -m unittest discover -s tests -v
 ```
 
-The tests cover authentication, ownership isolation, nutrition CRUD, deterministic total calculation, API-key lifecycle behavior, and KMS user binding.
+The tests cover authentication, provider/model selection, dual-key isolation, ownership isolation, nutrition CRUD, deterministic total calculation, both provider adapters, API-key lifecycle behavior, and KMS user/provider binding.
 
 ## Docker
 
@@ -180,8 +201,9 @@ Build and run the production image:
 docker build -t janus-gate .
 docker run --rm -p 8080:8080 \
   -e JWT_SECRET_KEY=replace-with-a-long-random-secret \
-  -e OPENAI_MODEL=gpt-5.6 \
-  -e OPENAI_KMS_KEY_NAME=projects/PROJECT_ID/locations/REGION/keyRings/janus-gate/cryptoKeys/user-openai-keys \
+  -e OPENAI_MODEL=gpt-5.6-sol \
+  -e MISTRAL_MODEL=mistral-small-2603 \
+  -e AI_KMS_KEY_NAME=projects/PROJECT_ID/locations/REGION/keyRings/janus-gate/cryptoKeys/user-openai-keys \
   janus-gate
 ```
 
@@ -203,7 +225,13 @@ The Cloud Run runtime service account needs:
 - Firestore access for users, credentials, and nutrition entries
 - `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the configured KMS key
 
-The deployment sets `OPENAI_MODEL` and `OPENAI_KMS_KEY_NAME`. A shared `OPENAI_API_KEY` is not required because every user supplies their own key.
+The workflow grants that KMS role directly on
+`projects/PROJECT_ID/locations/europe-west1/keyRings/janus-gate/cryptoKeys/user-openai-keys`
+before deployment. It assumes the key ring and symmetric key already exist and
+does not create or rotate either one. The identity behind `GCP_SA_KEY` must be
+allowed to read and update that key's IAM policy.
+
+The deployment sets `OPENAI_MODEL`, `MISTRAL_MODEL`, and `AI_KMS_KEY_NAME`. The service still accepts the legacy `OPENAI_KMS_KEY_NAME` during migration. Shared provider API keys are not required because every user supplies their own keys.
 
 ## Project structure
 
@@ -215,8 +243,11 @@ The deployment sets `OPENAI_MODEL` and `OPENAI_KMS_KEY_NAME`. A shared `OPENAI_A
 ├── services/
 │   ├── firebase/                # Firestore persistence by data type
 │   ├── credential_service.py    # Cloud KMS encryption and decryption
+│   ├── ai_catalog.py            # Allowlisted providers and models
+│   ├── ai_service.py            # Provider-neutral request dispatch
 │   ├── logging_service.py       # Console logging
-│   └── openai_service.py        # Key verification and meal analysis
+│   ├── mistral_service.py       # Mistral key verification and meal analysis
+│   └── openai_service.py        # OpenAI key verification and meal analysis
 ├── tests/                       # Unit and API tests
 ├── app.py                       # Flask application and routes
 ├── Dockerfile

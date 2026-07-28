@@ -82,6 +82,14 @@ jobs:
           gcloud projects add-iam-policy-binding ${{ env.PROJECT_ID }} \
             --member="serviceAccount:janus-gate@${{ env.PROJECT_ID }}.iam.gserviceaccount.com" \
             --role="roles/datastore.viewer"
+
+      - name: Grant KMS key permissions
+        run: |
+          gcloud kms keys add-iam-policy-binding user-openai-keys \
+            --keyring=janus-gate \
+            --location="${REGION}" \
+            --member="serviceAccount:janus-gate@${PROJECT_ID}.iam.gserviceaccount.com" \
+            --role="roles/cloudkms.cryptoKeyEncrypterDecrypter"
             
       - name: Deploy to Cloud Run
         run: |
@@ -95,7 +103,7 @@ jobs:
             --cpu 1 \
             --max-instances 10 \
             --timeout 300 \
-            --set-env-vars "FLASK_ENV=production,JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }},OPENAI_MODEL=gpt-5.6,OPENAI_KMS_KEY_NAME=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/keyRings/janus-gate/cryptoKeys/user-openai-keys"
+            --set-env-vars "FLASK_ENV=production,JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }},OPENAI_MODEL=gpt-5.6-sol,MISTRAL_MODEL=mistral-small-2603,AI_KMS_KEY_NAME=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/keyRings/janus-gate/cryptoKeys/user-openai-keys"
             
       - name: Get service URL
         id: service-url
