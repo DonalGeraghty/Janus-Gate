@@ -19,6 +19,49 @@ SAMPLE_ANALYSIS = {
     "clarification_question": "",
 }
 
+SAMPLE_RECOMMENDATION = {
+    "summary": "Two protein-focused meals fit the remaining budget.",
+    "meals": [
+        {
+            "name": "Chicken salad",
+            "items": [
+                {
+                    "food": "Chicken breast",
+                    "portion": "150 g cooked",
+                    "calories": 250,
+                    "protein_g": 46.0,
+                },
+                {
+                    "food": "Mixed salad",
+                    "portion": "1 large bowl",
+                    "calories": 100,
+                    "protein_g": 4.0,
+                },
+            ],
+            "rationale": "Lean protein with plenty of vegetables.",
+        },
+        {
+            "name": "Yoghurt and berries",
+            "items": [
+                {
+                    "food": "Greek yoghurt",
+                    "portion": "200 g",
+                    "calories": 150,
+                    "protein_g": 20.0,
+                },
+                {
+                    "food": "Mixed berries",
+                    "portion": "100 g",
+                    "calories": 50,
+                    "protein_g": 1.0,
+                },
+            ],
+            "rationale": "A light high-protein final meal.",
+        },
+    ],
+    "assumptions": ["Low-fat Greek yoghurt was assumed."],
+}
+
 
 class NutritionApiTests(unittest.TestCase):
     def setUp(self):
@@ -78,6 +121,76 @@ class NutritionApiTests(unittest.TestCase):
                 "/api/nutrition/analyze", headers=headers, json={"message": "Two eggs"}
             )
         self.assertEqual(response.status_code, 429)
+
+    def test_recommend_returns_structured_plan_without_writing(self):
+        headers = self.register()
+        with (
+            patch("app.get_openai_credential", return_value=(True, None, {"ciphertext": "encrypted"})),
+            patch("app.decrypt_api_key", return_value="user-api-key-1234567890"),
+            patch("app.recommend_meals", return_value={
+                **SAMPLE_RECOMMENDATION,
+                "calorie_budget_remaining": 800,
+                "protein_remaining_g": 60.0,
+                "plan_total_calories": 550,
+                "plan_total_protein_g": 71.0,
+                "projected_daily_calories": 1750,
+                "projected_daily_protein_g": 151.0,
+            }) as recommend_mock,
+        ):
+            response = self.client.post(
+                "/api/nutrition/recommend",
+                headers=headers,
+                json={
+                    "current_calories": 1200,
+                    "current_protein_g": 80,
+                    "target_calories": 2000,
+                    "target_protein_g": 140,
+                    "meals_remaining": 2,
+                    "preferences": "No shellfish",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        recommendation = response.get_json()["recommendation"]
+        self.assertEqual(recommendation["plan_total_calories"], 550)
+        self.assertEqual(len(recommendation["meals"]), 2)
+        self.assertEqual(db_state.nutrition_entries_memory, {})
+        context = recommend_mock.call_args.args[0]
+        self.assertEqual(context.current_calories, 1200)
+        self.assertEqual(context.preferences, "No shellfish")
+
+    def test_recommend_validates_input_and_requires_key(self):
+        headers = self.register()
+        response = self.client.post(
+            "/api/nutrition/recommend",
+            headers=headers,
+            json={
+                "current_calories": 1200,
+                "current_protein_g": 80,
+                "target_calories": 200,
+                "target_protein_g": 140,
+                "meals_remaining": 4,
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.get_json()["error"], "invalid_recommendation_request"
+        )
+
+        with patch("app.get_openai_credential", return_value=(True, None, None)):
+            response = self.client.post(
+                "/api/nutrition/recommend",
+                headers=headers,
+                json={
+                    "current_calories": 1200,
+                    "current_protein_g": 80,
+                    "target_calories": 2000,
+                    "target_protein_g": 140,
+                    "meals_remaining": 2,
+                },
+            )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"], "openai_key_required")
 
     def test_confirmed_entry_is_saved_and_totals_are_recalculated(self):
         headers = self.register()
@@ -228,6 +341,35 @@ class OpenAIServiceTests(unittest.TestCase):
         )
         self.assertEqual(result["total_calories"], 340)
         openai_mock.assert_called_once_with(api_key="user-api-key-1234567890")
+        request = openai_mock.return_value.responses.parse.call_args.kwargs
+        self.assertFalse(request["store"])
+        self.assertNotIn("user@example.com", str(request))
+
+    @patch("services.openai_service.OpenAI")
+    def test_recommendation_totals_are_recalculated(self, openai_mock):
+        from core.nutrition_service import MealRecommendationInput
+        from services.openai_service import MealRecommendation, recommend_meals
+
+        parsed = MealRecommendation.model_validate(SAMPLE_RECOMMENDATION)
+        openai_mock.return_value.responses.parse.return_value.output_parsed = parsed
+        context = MealRecommendationInput(
+            current_calories=1200,
+            current_protein_g=80,
+            target_calories=2000,
+            target_protein_g=140,
+            meals_remaining=2,
+            preferences="No shellfish",
+        )
+        result = recommend_meals(
+            context, "user@example.com", "user-api-key-1234567890"
+        )
+
+        self.assertEqual(result["meals"][0]["total_calories"], 350)
+        self.assertEqual(result["meals"][0]["total_protein_g"], 50.0)
+        self.assertEqual(result["plan_total_calories"], 550)
+        self.assertEqual(result["plan_total_protein_g"], 71.0)
+        self.assertEqual(result["projected_daily_calories"], 1750)
+        self.assertEqual(result["projected_daily_protein_g"], 151.0)
         request = openai_mock.return_value.responses.parse.call_args.kwargs
         self.assertFalse(request["store"])
         self.assertNotIn("user@example.com", str(request))

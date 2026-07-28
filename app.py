@@ -9,7 +9,7 @@ from flask_cors import CORS
 from pydantic import ValidationError
 
 from core.auth_service import decode_access_token, login_user, register_user, verify_password
-from core.nutrition_service import NutritionEntryInput
+from core.nutrition_service import MealRecommendationInput, NutritionEntryInput
 from services.firebase_service import (
     create_nutrition_entry,
     delete_nutrition_entry,
@@ -36,6 +36,7 @@ from services.openai_service import (
     OpenAIRateLimitError,
     OpenAIServiceError,
     analyze_meal,
+    recommend_meals,
     validate_api_key,
 )
 
@@ -306,6 +307,71 @@ def nutrition_analyze():
     return jsonify(status="success", analysis=analysis)
 
 
+@app.post("/api/nutrition/recommend")
+def nutrition_recommend():
+    email = _authenticated_user_email()
+    if not email:
+        return jsonify(status="error", error="Unauthorized"), 401
+
+    try:
+        recommendation_input = MealRecommendationInput.model_validate(
+            request.get_json(silent=True) or {}
+        )
+    except ValidationError:
+        return jsonify(
+            status="error",
+            error="invalid_recommendation_request",
+            message="Enter valid nutrition targets and choose one to three meals",
+        ), 400
+
+    ok, error, credential = get_openai_credential(email)
+    if not ok:
+        logger.error("Credential read failed for %s: %s", email, error)
+        return jsonify(
+            status="error",
+            error="credential_service_unavailable",
+            message="Secure credential storage is unavailable",
+        ), 503
+    if not credential:
+        return jsonify(
+            status="error",
+            error="openai_key_required",
+            message="Add an OpenAI API key before requesting meal recommendations",
+        ), 409
+
+    try:
+        api_key = decrypt_api_key(credential.get("ciphertext", ""), email)
+        recommendation = recommend_meals(recommendation_input, email, api_key)
+    except (CredentialConfigurationError, CredentialEncryptionError) as error:
+        logger.error("Credential decryption unavailable: %s", type(error).__name__)
+        return jsonify(
+            status="error",
+            error="credential_service_unavailable",
+            message="Secure credential storage is unavailable",
+        ), 503
+    except OpenAIAuthenticationError:
+        return jsonify(
+            status="error",
+            error="openai_key_invalid",
+            message="Your OpenAI API key is no longer valid",
+        ), 422
+    except OpenAIRateLimitError:
+        return jsonify(
+            status="error",
+            error="openai_rate_limited",
+            message="Meal recommendations are temporarily busy",
+        ), 429
+    except OpenAIServiceError as error:
+        logger.error("Meal recommendation failed: %s", error)
+        return jsonify(
+            status="error",
+            error="recommendation_failed",
+            message="Meal recommendation failed",
+        ), 502
+
+    return jsonify(status="success", recommendation=recommendation)
+
+
 @app.post("/api/nutrition/entries")
 def nutrition_entries_create():
     email = _authenticated_user_email()
@@ -419,6 +485,7 @@ def root():
             "get_openai_key_status": "GET /api/user/openai-key",
             "delete_openai_key": "DELETE /api/user/openai-key",
             "analyze_meal": "POST /api/nutrition/analyze",
+            "recommend_meals": "POST /api/nutrition/recommend",
             "create_nutrition_entry": "POST /api/nutrition/entries",
             "list_nutrition_entries": "GET /api/nutrition/entries",
             "delete_nutrition_entry": "DELETE /api/nutrition/entries/{entry_id}",

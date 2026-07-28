@@ -20,3 +20,14 @@ class NutritionEntryInput(BaseModel):
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
+
+
+class MealRecommendationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, allow_inf_nan=False)
+
+    current_calories: int = Field(ge=0, le=100_000)
+    current_protein_g: float = Field(ge=0, le=10_000)
+    target_calories: int = Field(ge=500, le=10_000)
+    target_protein_g: float = Field(ge=10, le=1_000)
+    meals_remaining: int = Field(ge=1, le=3)
+    preferences: str = Field(default="", max_length=1_000)

@@ -10,6 +10,7 @@ Janus Gate is the backend API for [Nyx AI](https://github.com/DonalGeraghty/NyxA
 - Encrypt OpenAI keys with Google Cloud KMS before persistence
 - Analyze meal descriptions with structured OpenAI responses
 - Create, list, update, and delete user-owned nutrition entries
+- Generate structured meal recommendations from today's calorie and protein progress
 - Delete credentials and nutrition data when an account is removed
 - Expose health and database-status endpoints for deployment checks
 
@@ -116,6 +117,7 @@ Passwords must contain at least eight characters. JWTs use HS256 and expire afte
 | `GET` | `/api/user/openai-key` | Bearer JWT | Return safe credential-status metadata |
 | `DELETE` | `/api/user/openai-key` | Bearer JWT | Remove the stored credential |
 | `POST` | `/api/nutrition/analyze` | Bearer JWT | Analyze a meal without saving it |
+| `POST` | `/api/nutrition/recommend` | Bearer JWT | Recommend meals for the rest of the day |
 | `POST` | `/api/nutrition/entries` | Bearer JWT | Save a reviewed nutrition entry |
 | `GET` | `/api/nutrition/entries` | Bearer JWT | List entries, optionally filtered by date |
 | `PUT` | `/api/nutrition/entries/{entry_id}` | Bearer JWT | Replace an owned entry and recalculate totals |
