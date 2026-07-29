@@ -23,6 +23,10 @@ class AuthApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.get_json()["user"]["email"], "user@example.com")
+        self.assertEqual(
+            response.get_json()["user"]["account_id"],
+            db_state.auth_users_memory["user@example.com"][ACCOUNT_ID_FIELD],
+        )
         token = response.get_json()["token"]
 
         response = self.client.post(
@@ -32,7 +36,12 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
         headers = {"Authorization": f"Bearer {token}"}
-        self.assertEqual(self.client.get("/api/auth/me", headers=headers).status_code, 200)
+        current_user = self.client.get("/api/auth/me", headers=headers)
+        self.assertEqual(current_user.status_code, 200)
+        self.assertEqual(
+            current_user.get_json()["user"]["account_id"],
+            response.get_json()["user"]["account_id"],
+        )
         self.assertEqual(
             self.client.delete(
                 "/api/auth/account",

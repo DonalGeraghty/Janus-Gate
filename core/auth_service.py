@@ -91,7 +91,11 @@ def register_user(email, password):
         return None, err or "exists", None
 
     token = create_access_token(email_norm, account_id)
-    return {"email": email_norm, "token": token}, None, None
+    return {
+        "email": email_norm,
+        "account_id": account_id,
+        "token": token,
+    }, None, None
 
 
 def login_user(email, password):
@@ -123,4 +127,8 @@ def login_user(email, password):
         return None, "invalid_credentials", None
 
     token = create_access_token(email_norm, account_id)
-    return {"email": email_norm, "token": token}, None, None
+    return {
+        "email": email_norm,
+        "account_id": account_id,
+        "token": token,
+    }, None, None

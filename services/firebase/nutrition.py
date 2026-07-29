@@ -40,6 +40,7 @@ def _serialize_entry(entry_id, data):
             else data.get("updated_at")
         ),
         "source_message": data.get("source_message"),
+        "client_request_id": data.get("client_request_id"),
     }
 
 
@@ -67,6 +68,9 @@ def _create_nutrition_entry_in_transaction(
     )
     if error:
         return False, error, None
+    existing = entry_ref.get(transaction=transaction)
+    if existing.exists:
+        return True, None, existing.to_dict() or {}
     transaction.set(entry_ref, data)
     return True, None, data
 
@@ -77,6 +81,7 @@ def create_nutrition_entry(
     eaten_at,
     source_message=None,
     account_id=None,
+    client_request_id=None,
 ):
     email_key = normalize_user_email(email)
     if not email_key:
@@ -90,12 +95,18 @@ def create_nutrition_entry(
         "eaten_at": eaten_at,
         "created_at": now,
         "source_message": source_message,
+        "client_request_id": client_request_id,
     }
 
     if db_state.users_collection_ref and db_state.db is not None:
         try:
             user_ref = db_state.users_collection_ref.document(email_key)
-            doc_ref = _entries_collection(email_key).document()
+            document_id = (
+                f"request_{client_request_id.replace('-', '')}"
+                if client_request_id
+                else None
+            )
+            doc_ref = _entries_collection(email_key).document(document_id)
             transaction = db_state.db.transaction()
             created, error, stored_data = firestore.transactional(
                 _create_nutrition_entry_in_transaction
@@ -125,11 +136,16 @@ def create_nutrition_entry(
         if not account_id_matches(account_id, user):
             return False, "account_mismatch", None
 
-        entry_id = uuid4().hex
-        db_state.nutrition_entries_memory.setdefault(
-            email_key,
-            {},
-        )[entry_id] = data
+        entry_id = (
+            f"request_{client_request_id.replace('-', '')}"
+            if client_request_id
+            else uuid4().hex
+        )
+        entries = db_state.nutrition_entries_memory.setdefault(email_key, {})
+        existing = entries.get(entry_id)
+        if existing:
+            return True, None, _serialize_entry(entry_id, existing)
+        entries[entry_id] = data
         return True, None, _serialize_entry(entry_id, data)
 
 

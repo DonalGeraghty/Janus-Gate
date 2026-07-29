@@ -17,6 +17,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    env:
+      PUSH_CRON_SECRET: ${{ secrets.PUSH_CRON_SECRET }}
     
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +68,7 @@ jobs:
           gcloud services enable firestore.googleapis.com
           gcloud services enable cloudbuild.googleapis.com
           gcloud services enable cloudkms.googleapis.com
+          gcloud services enable cloudscheduler.googleapis.com
           
       - name: Create service account if not exists
         run: |
@@ -103,7 +106,7 @@ jobs:
             --cpu 1 \
             --max-instances 10 \
             --timeout 300 \
-            --set-env-vars "FLASK_ENV=production,JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }},OPENAI_MODEL=gpt-5.6-sol,MISTRAL_MODEL=mistral-small-2603,ANTHROPIC_MODEL=claude-sonnet-5,AI_KMS_KEY_NAME=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/keyRings/janus-gate/cryptoKeys/user-openai-keys"
+            --set-env-vars "FLASK_ENV=production,JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }},OPENAI_MODEL=gpt-5.6-sol,MISTRAL_MODEL=mistral-small-2603,ANTHROPIC_MODEL=claude-sonnet-5,AI_KMS_KEY_NAME=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/keyRings/janus-gate/cryptoKeys/user-openai-keys,VAPID_PRIVATE_KEY=${{ secrets.VAPID_PRIVATE_KEY }},VAPID_PUBLIC_KEY=${{ secrets.VAPID_PUBLIC_KEY }},VAPID_SUBJECT=${{ secrets.VAPID_SUBJECT }},PUSH_CRON_SECRET=${{ secrets.PUSH_CRON_SECRET }}"
             
       - name: Get service URL
         id: service-url
@@ -115,6 +118,27 @@ jobs:
         run: |
           echo "Testing deployed service at ${{ steps.service-url.outputs.url }}"
           curl -f ${{ steps.service-url.outputs.url }}/health || exit 1
+
+      - name: Configure push reminder scheduler
+        if: ${{ env.PUSH_CRON_SECRET != '' }}
+        run: |
+          JOB_NAME="nyx-push-reminders"
+          JOB_URI="${{ steps.service-url.outputs.url }}/api/internal/push/reminders"
+          if gcloud scheduler jobs describe "$JOB_NAME" --location="${{ env.REGION }}" >/dev/null 2>&1; then
+            gcloud scheduler jobs update http "$JOB_NAME" \
+              --location="${{ env.REGION }}" \
+              --schedule="*/5 * * * *" \
+              --uri="$JOB_URI" \
+              --http-method=POST \
+              --headers="X-Cron-Secret=$PUSH_CRON_SECRET"
+          else
+            gcloud scheduler jobs create http "$JOB_NAME" \
+              --location="${{ env.REGION }}" \
+              --schedule="*/5 * * * *" \
+              --uri="$JOB_URI" \
+              --http-method=POST \
+              --headers="X-Cron-Secret=$PUSH_CRON_SECRET"
+          fi
           
       - name: Comment on PR
         if: github.event_name == 'pull_request'
