@@ -13,25 +13,52 @@ from .ai_contract import (
     MealAnalysis,
     MealRecommendation,
 )
+from .ai_errors import (
+    AIAuthenticationError,
+    AIAuthorizationError,
+    AIBillingError,
+    AIRateLimitError,
+    AIServiceError,
+)
+from .ai_validation import AICredentialValidation, BILLING_REQUIRED
 
 
-class MistralAuthenticationError(RuntimeError):
+KEY_VALIDATION_TIMEOUT_MS = 5_000
+
+
+class MistralAuthenticationError(AIAuthenticationError):
     pass
 
 
-class MistralRateLimitError(RuntimeError):
+class MistralAuthorizationError(AIAuthorizationError):
     pass
 
 
-class MistralServiceError(RuntimeError):
+class MistralBillingError(AIBillingError):
+    pass
+
+
+class MistralRateLimitError(AIRateLimitError):
+    pass
+
+
+class MistralServiceError(AIServiceError):
     pass
 
 
 def _raise_mapped_mistral_error(error):
     status_code = getattr(error, "status_code", None)
-    if status_code in (401, 403):
+    if status_code == 401:
         raise MistralAuthenticationError(
             "Mistral API key is invalid or unauthorized"
+        ) from error
+    if status_code == 402:
+        raise MistralBillingError(
+            "Mistral billing or credit is required"
+        ) from error
+    if status_code == 403:
+        raise MistralAuthorizationError(
+            "Mistral API access is denied"
         ) from error
     if status_code == 429:
         raise MistralRateLimitError("Mistral rate limit reached") from error
@@ -73,7 +100,10 @@ def validate_api_key(api_key, email=None):
     api_key = _normalize_api_key(api_key)
 
     try:
-        with Mistral(api_key=api_key) as client:
+        with Mistral(
+            api_key=api_key,
+            timeout_ms=KEY_VALIDATION_TIMEOUT_MS,
+        ) as client:
             client.models.list()
     except (
         errors.MistralError,
@@ -82,8 +112,10 @@ def validate_api_key(api_key, email=None):
         json.JSONDecodeError,
         TypeError,
     ) as error:
+        if getattr(error, "status_code", None) == 402:
+            return AICredentialValidation(api_key, BILLING_REQUIRED)
         _raise_mapped_mistral_error(error)
-    return api_key
+    return AICredentialValidation(api_key)
 
 
 def analyze_meal(message, email, api_key, model):

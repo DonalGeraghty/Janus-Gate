@@ -15,18 +15,20 @@ from services.ai_contract import (
     MealRecommendation,
 )
 from services.anthropic_service import (
-    DEFAULT_ANTHROPIC_MODEL,
     GENERATION_MAX_RETRIES,
     GENERATION_TIMEOUT_SECONDS,
     KEY_VALIDATION_TIMEOUT_SECONDS,
     MEAL_ANALYSIS_MAX_TOKENS,
     MEAL_RECOMMENDATION_MAX_TOKENS,
     AnthropicAuthenticationError,
+    AnthropicAuthorizationError,
+    AnthropicBillingError,
     AnthropicRateLimitError,
     AnthropicServiceError,
     analyze_meal,
     recommend_meals,
     validate_api_key,
+    _raise_mapped_anthropic_error,
 )
 
 
@@ -131,33 +133,32 @@ def _status_error(error_type, status_code):
 
 class AnthropicCredentialTests(unittest.TestCase):
     @patch("services.anthropic_service.Anthropic")
-    def test_validate_key_counts_synthetic_tokens_without_user_data(
+    def test_validate_key_lists_models_without_user_data_or_generation(
         self,
         anthropic_mock,
     ):
-        normalized = validate_api_key(f"  {API_KEY}  ", EMAIL)
+        validation = validate_api_key(f"  {API_KEY}  ", EMAIL)
 
-        self.assertEqual(normalized, API_KEY)
+        self.assertEqual(validation.api_key, API_KEY)
+        self.assertIsNone(validation.warning)
         anthropic_mock.assert_called_once_with(
             api_key=API_KEY,
             max_retries=0,
             timeout=KEY_VALIDATION_TIMEOUT_SECONDS,
         )
         client = anthropic_mock.return_value.__enter__.return_value
-        client.messages.count_tokens.assert_called_once_with(
-            model=DEFAULT_ANTHROPIC_MODEL,
-            messages=[{"role": "user", "content": "Hello"}],
-        )
+        client.models.list.assert_called_once_with(limit=1)
+        client.messages.count_tokens.assert_not_called()
+        client.messages.create.assert_not_called()
         self.assertNotIn(EMAIL, str(anthropic_mock.mock_calls))
 
     @patch("services.anthropic_service.Anthropic")
     def test_validate_key_accepts_an_explicit_model(self, anthropic_mock):
-        self.assertEqual(validate_api_key(API_KEY, model=MODEL), API_KEY)
+        validation = validate_api_key(API_KEY, model=MODEL)
 
+        self.assertEqual(validation.api_key, API_KEY)
         client = anthropic_mock.return_value.__enter__.return_value
-        request = client.messages.count_tokens.call_args.kwargs
-        self.assertEqual(request["model"], MODEL)
-        self.assertNotIn("max_tokens", request)
+        client.models.list.assert_called_once_with(limit=1)
 
     @patch("services.anthropic_service.Anthropic")
     def test_invalid_key_shapes_are_rejected_without_network(self, anthropic_mock):
@@ -183,7 +184,7 @@ class AnthropicCredentialTests(unittest.TestCase):
             ),
             (
                 _status_error(anthropic.PermissionDeniedError, 403),
-                AnthropicAuthenticationError,
+                AnthropicAuthorizationError,
             ),
             (
                 _status_error(anthropic.RateLimitError, 429),
@@ -209,9 +210,28 @@ class AnthropicCredentialTests(unittest.TestCase):
                     "services.anthropic_service.Anthropic"
                 ) as anthropic_mock:
                     client = anthropic_mock.return_value.__enter__.return_value
-                    client.messages.count_tokens.side_effect = sdk_error
+                    client.models.list.side_effect = sdk_error
                     with self.assertRaises(expected_error):
                         validate_api_key(API_KEY, EMAIL)
+
+    @patch("services.anthropic_service.Anthropic")
+    def test_billing_error_still_returns_a_storable_key(self, anthropic_mock):
+        client = anthropic_mock.return_value.__enter__.return_value
+        client.models.list.side_effect = _status_error(
+            anthropic.APIStatusError,
+            402,
+        )
+
+        validation = validate_api_key(API_KEY, EMAIL)
+
+        self.assertEqual(validation.api_key, API_KEY)
+        self.assertEqual(validation.warning, "provider_billing_required")
+
+    def test_billing_error_is_mapped_for_generation_requests(self):
+        with self.assertRaises(AnthropicBillingError):
+            _raise_mapped_anthropic_error(
+                _status_error(anthropic.APIStatusError, 402)
+            )
 
 
 class AnthropicMealAnalysisTests(unittest.TestCase):

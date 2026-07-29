@@ -25,9 +25,28 @@ from .ai_contract import (
     MealRecommendation,
     RecommendedMeal,
 )
-from .ai_errors import AIAuthenticationError, AIRateLimitError, AIServiceError
+from .ai_errors import (
+    AIAuthenticationError,
+    AIAuthorizationError,
+    AIBillingError,
+    AIRateLimitError,
+    AIServiceError,
+)
+from .ai_validation import AICredentialValidation, BILLING_REQUIRED
+
+
+KEY_VALIDATION_TIMEOUT_SECONDS = 5.0
+
 
 class OpenAIAuthenticationError(AIAuthenticationError):
+    pass
+
+
+class OpenAIAuthorizationError(AIAuthorizationError):
+    pass
+
+
+class OpenAIBillingError(AIBillingError):
     pass
 
 
@@ -48,10 +67,38 @@ def _safety_identifier(email):
     return hmac.new(secret.encode("utf-8"), email.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def _openai_error_code(error):
+    code = getattr(error, "code", None)
+    if isinstance(code, str):
+        return code
+    body = getattr(error, "body", None)
+    if not isinstance(body, dict):
+        return None
+    code = body.get("code")
+    if isinstance(code, str):
+        return code
+    nested_error = body.get("error")
+    if isinstance(nested_error, dict) and isinstance(nested_error.get("code"), str):
+        return nested_error["code"]
+    return None
+
+
+def _is_billing_error(error):
+    return (
+        getattr(error, "status_code", None) == 402
+        or _openai_error_code(error) == "insufficient_quota"
+    )
+
+
 def _raise_mapped_openai_error(error):
-    if isinstance(error, (AuthenticationError, PermissionDeniedError)):
+    status_code = getattr(error, "status_code", None)
+    if isinstance(error, AuthenticationError) or status_code == 401:
         raise OpenAIAuthenticationError("OpenAI API key is invalid or unauthorized") from error
-    if isinstance(error, RateLimitError):
+    if _is_billing_error(error):
+        raise OpenAIBillingError("OpenAI billing or credit is required") from error
+    if isinstance(error, PermissionDeniedError) or status_code == 403:
+        raise OpenAIAuthorizationError("OpenAI API access is denied") from error
+    if isinstance(error, RateLimitError) or status_code == 429:
         raise OpenAIRateLimitError("OpenAI rate limit reached") from error
     raise OpenAIServiceError("OpenAI request failed") from error
 
@@ -60,7 +107,7 @@ def _model_name(model=None):
     return model or os.environ.get("OPENAI_MODEL", "gpt-5.6-sol")
 
 
-def validate_api_key(api_key, email, model=None):
+def validate_api_key(api_key, email=None, model=None):
     if not isinstance(api_key, str):
         raise ValueError("invalid_api_key")
     api_key = api_key.strip()
@@ -68,14 +115,12 @@ def validate_api_key(api_key, email, model=None):
         raise ValueError("invalid_api_key")
 
     try:
-        OpenAI(api_key=api_key).responses.create(
-            model=_model_name(model),
-            input="Reply only with OK.",
-            max_output_tokens=16,
-            reasoning={"effort": "none"},
-            safety_identifier=_safety_identifier(email),
-            store=False,
-        )
+        with OpenAI(
+            api_key=api_key,
+            max_retries=0,
+            timeout=KEY_VALIDATION_TIMEOUT_SECONDS,
+        ) as client:
+            client.models.list()
     except (
         AuthenticationError,
         PermissionDeniedError,
@@ -87,8 +132,10 @@ def validate_api_key(api_key, email, model=None):
         json.JSONDecodeError,
         TypeError,
     ) as error:
+        if _is_billing_error(error):
+            return AICredentialValidation(api_key, BILLING_REQUIRED)
         _raise_mapped_openai_error(error)
-    return api_key
+    return AICredentialValidation(api_key)
 
 
 def analyze_meal(message, email, api_key, model=None):

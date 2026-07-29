@@ -5,6 +5,14 @@ class AIAuthenticationError(RuntimeError):
     pass
 
 
+class AIAuthorizationError(RuntimeError):
+    pass
+
+
+class AIBillingError(RuntimeError):
+    pass
+
+
 class AIRateLimitError(RuntimeError):
     pass
 

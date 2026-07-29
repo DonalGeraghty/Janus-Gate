@@ -8,7 +8,10 @@ import httpx
 from core.nutrition_service import MealRecommendationInput
 from services import mistral_service
 from services.mistral_service import (
+    KEY_VALIDATION_TIMEOUT_MS,
     MistralAuthenticationError,
+    MistralAuthorizationError,
+    MistralBillingError,
     MistralRateLimitError,
     MistralServiceError,
     analyze_meal,
@@ -126,17 +129,21 @@ class MistralCredentialTests(unittest.TestCase):
     def test_validate_key_trims_and_lists_models_without_sending_email(
         self, mistral_mock
     ):
-        normalized = validate_api_key(f"  {API_KEY}  ", EMAIL)
+        validation = validate_api_key(f"  {API_KEY}  ", EMAIL)
 
-        self.assertEqual(normalized, API_KEY)
-        mistral_mock.assert_called_once_with(api_key=API_KEY)
+        self.assertEqual(validation.api_key, API_KEY)
+        self.assertIsNone(validation.warning)
+        mistral_mock.assert_called_once_with(
+            api_key=API_KEY,
+            timeout_ms=KEY_VALIDATION_TIMEOUT_MS,
+        )
         client = mistral_mock.return_value.__enter__.return_value
         client.models.list.assert_called_once_with()
         self.assertNotIn(EMAIL, str(mistral_mock.mock_calls))
 
     @patch("services.mistral_service.Mistral")
     def test_validate_key_accepts_omitted_email(self, mistral_mock):
-        self.assertEqual(validate_api_key(API_KEY), API_KEY)
+        self.assertEqual(validate_api_key(API_KEY).api_key, API_KEY)
         self.assertNotIn("email", str(mistral_mock.mock_calls).lower())
 
     @patch("services.mistral_service.Mistral")
@@ -158,7 +165,7 @@ class MistralCredentialTests(unittest.TestCase):
     def test_sdk_status_codes_are_mapped(self):
         cases = [
             (401, MistralAuthenticationError),
-            (403, MistralAuthenticationError),
+            (403, MistralAuthorizationError),
             (429, MistralRateLimitError),
             (400, MistralServiceError),
             (500, MistralServiceError),
@@ -170,6 +177,22 @@ class MistralCredentialTests(unittest.TestCase):
                     client.models.list.side_effect = _sdk_error(status_code)
                     with self.assertRaises(expected_error):
                         validate_api_key(API_KEY, EMAIL)
+
+    @patch("services.mistral_service.Mistral")
+    def test_billing_error_still_returns_a_storable_key(self, mistral_mock):
+        client = mistral_mock.return_value.__enter__.return_value
+        client.models.list.side_effect = _sdk_error(402)
+
+        validation = validate_api_key(API_KEY, EMAIL)
+
+        self.assertEqual(validation.api_key, API_KEY)
+        self.assertEqual(validation.warning, "provider_billing_required")
+
+    def test_billing_error_is_mapped_for_generation_requests(self):
+        from services.mistral_service import _raise_mapped_mistral_error
+
+        with self.assertRaises(MistralBillingError):
+            _raise_mapped_mistral_error(_sdk_error(402))
 
     def test_network_errors_are_mapped_to_service_error(self):
         for network_error in (

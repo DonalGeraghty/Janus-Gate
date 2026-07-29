@@ -4,7 +4,13 @@ from unittest.mock import ANY, Mock, patch
 
 from app import app
 from services import ai_service
-from services.ai_errors import AIRateLimitError, AIServiceError
+from services.ai_errors import (
+    AIAuthorizationError,
+    AIBillingError,
+    AIRateLimitError,
+    AIServiceError,
+)
+from services.ai_validation import AICredentialValidation, BILLING_REQUIRED
 from services.firebase import db_state
 from services.firebase.users import _save_ai_selection_in_transaction
 from services.anthropic_service import AnthropicRateLimitError
@@ -256,6 +262,47 @@ class AISettingsApiTests(unittest.TestCase):
             account_id=db_state.auth_users_memory["user@example.com"]["account_id"],
         )
 
+    def test_billing_limited_key_is_saved_with_a_non_fatal_warning(self):
+        headers = self.register()
+        status = {
+            "configured": True,
+            "last_four": "Cd34",
+            "verified_at": "2026-07-29T12:00:00+00:00",
+        }
+        with (
+            patch(
+                "app.validate_api_key",
+                return_value=AICredentialValidation(
+                    ANTHROPIC_KEY,
+                    BILLING_REQUIRED,
+                ),
+            ),
+            patch(
+                "app.encrypt_api_key",
+                return_value="anthropic-ciphertext",
+            ),
+            patch(
+                "app.save_ai_credential",
+                return_value=(True, None, status),
+            ) as save_mock,
+        ):
+            response = self.client.put(
+                "/api/user/ai-credentials/anthropic",
+                headers=headers,
+                json={"api_key": ANTHROPIC_KEY},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["credential"], status)
+        self.assertEqual(
+            payload["warning"]["code"],
+            "provider_billing_required",
+        )
+        self.assertNotIn(ANTHROPIC_KEY, response.get_data(as_text=True))
+        self.assertNotIn("anthropic-ciphertext", response.get_data(as_text=True))
+        save_mock.assert_called_once()
+
     def test_anthropic_validation_error_uses_provider_display_name(self):
         headers = self.register()
         with patch("app.validate_api_key", side_effect=ValueError("invalid_api_key")):
@@ -270,6 +317,34 @@ class AISettingsApiTests(unittest.TestCase):
             response.get_json()["message"],
             "A valid Claude (Anthropic) API key is required",
         )
+
+    def test_transient_or_permission_failures_do_not_replace_a_saved_key(self):
+        headers = self.register()
+        cases = [
+            (AIAuthorizationError(), 403, "provider_access_denied"),
+            (AIRateLimitError(), 429, "provider_rate_limited"),
+            (AIServiceError(), 502, "provider_unavailable"),
+        ]
+        for validation_error, status_code, error_code in cases:
+            with self.subTest(error=error_code):
+                with (
+                    patch(
+                        "app.validate_api_key",
+                        side_effect=validation_error,
+                    ),
+                    patch("app.encrypt_api_key") as encrypt_mock,
+                    patch("app.save_ai_credential") as save_mock,
+                ):
+                    response = self.client.put(
+                        "/api/user/ai-credentials/anthropic",
+                        headers=headers,
+                        json={"api_key": ANTHROPIC_KEY},
+                    )
+
+                self.assertEqual(response.status_code, status_code)
+                self.assertEqual(response.get_json()["error"], error_code)
+                encrypt_mock.assert_not_called()
+                save_mock.assert_not_called()
 
     def test_invalid_provider_path_is_rejected_before_provider_call(self):
         headers = self.register()
@@ -504,6 +579,77 @@ class AISettingsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.get_json()["error"], "provider_unavailable")
         self.assertEqual(response.get_json()["provider"], "mistral")
+
+    def test_provider_billing_errors_are_distinct_for_both_ai_routes(self):
+        headers = self.register()
+        cases = [
+            (
+                "/api/nutrition/analyze",
+                {"message": "Two eggs"},
+                "app.analyze_meal",
+            ),
+            (
+                "/api/nutrition/recommend",
+                {
+                    "current_calories": 1200,
+                    "current_protein_g": 80,
+                    "target_calories": 2000,
+                    "target_protein_g": 140,
+                    "meals_remaining": 1,
+                    "preferences": "",
+                },
+                "app.recommend_meals",
+            ),
+        ]
+        for endpoint, payload, operation in cases:
+            with self.subTest(endpoint=endpoint):
+                with (
+                    patch(
+                        "app._selected_ai_credential",
+                        return_value=(
+                            MISTRAL_SELECTION,
+                            {"ciphertext": "encrypted", "aad_version": 2},
+                            None,
+                        ),
+                    ),
+                    patch("app.decrypt_api_key", return_value=MISTRAL_KEY),
+                    patch(operation, side_effect=AIBillingError()),
+                ):
+                    response = self.client.post(
+                        endpoint,
+                        headers=headers,
+                        json=payload,
+                    )
+
+                self.assertEqual(response.status_code, 402)
+                self.assertEqual(
+                    response.get_json()["error"],
+                    "provider_billing_required",
+                )
+                self.assertEqual(response.get_json()["provider"], "mistral")
+
+    def test_provider_permission_error_is_not_reported_as_an_invalid_key(self):
+        headers = self.register()
+        with (
+            patch(
+                "app._selected_ai_credential",
+                return_value=(
+                    MISTRAL_SELECTION,
+                    {"ciphertext": "encrypted", "aad_version": 2},
+                    None,
+                ),
+            ),
+            patch("app.decrypt_api_key", return_value=MISTRAL_KEY),
+            patch("app.analyze_meal", side_effect=AIAuthorizationError()),
+        ):
+            response = self.client.post(
+                "/api/nutrition/analyze",
+                headers=headers,
+                json={"message": "Two eggs"},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["error"], "provider_access_denied")
 
     def test_mistral_parse_type_error_returns_provider_unavailable(self):
         headers = self.register()

@@ -121,7 +121,7 @@ Passwords must contain at least eight characters. JWTs use HS256 and expire afte
 | `DELETE` | `/api/auth/account` | Bearer JWT | Delete the account after password confirmation |
 | `GET` | `/api/user/ai-settings` | Bearer JWT | Return the selected model, provider catalog, and safe key statuses |
 | `PUT` | `/api/user/ai-settings` | Bearer JWT | Select an allowlisted provider and model |
-| `PUT` | `/api/user/ai-credentials/{provider}` | Bearer JWT | Verify, encrypt, and store that provider's API key |
+| `PUT` | `/api/user/ai-credentials/{provider}` | Bearer JWT | Authenticate, encrypt, and store that provider's API key without generating output |
 | `GET` | `/api/user/ai-credentials/{provider}` | Bearer JWT | Return safe credential-status metadata |
 | `DELETE` | `/api/user/ai-credentials/{provider}` | Bearer JWT | Remove that provider's credential |
 | `PUT/GET/DELETE` | `/api/user/openai-key` | Bearer JWT | Compatibility alias for the OpenAI credential |
@@ -156,6 +156,14 @@ AI settings accept only these provider/model combinations:
 
 Existing users without saved AI settings default to OpenAI and `gpt-5.6-sol`. Selecting a provider does not delete any other provider's key. Analysis and recommendation requests never fall back silently: when the selected provider has no stored key, the API returns `409 provider_key_required`.
 
+Credential setup authenticates keys with provider model-metadata endpoints and
+does not spend inference tokens. A key can be stored when the provider reports
+that billing or credit is required; the successful response includes a
+non-fatal `provider_billing_required` warning. Actual analysis and recommendation
+requests return `402 provider_billing_required` when the account has no
+available credit or has reached its spending limit. Authentication, permission,
+rate-limit, and provider-availability failures remain distinct.
+
 Deployments that introduce account generations invalidate older JWTs without an
 `account_id` claim. Existing users must sign in once; a successful password
 login atomically assigns the legacy account an ID and issues a new token.
@@ -182,7 +190,8 @@ The API recalculates total calories and protein from the submitted items. Meal a
 ## AI credential security
 
 - Each user supplies their own OpenAI, Mistral AI, and/or Anthropic API key.
-- The selected provider verifies a new key before an existing credential is replaced.
+- The selected provider authenticates a new key through model metadata before an existing credential is replaced.
+- Credit availability is checked during real AI requests rather than stored as durable credential state.
 - The plaintext key is encrypted with Cloud KMS and is never returned by the API.
 - Firestore stores each provider separately with only ciphertext, the last four characters, version metadata, and timestamps.
 - New KMS additional authenticated data includes the normalized user email and provider, binding ciphertext to both.

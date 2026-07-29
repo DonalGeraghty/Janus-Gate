@@ -42,6 +42,8 @@ from services.ai_catalog import (
 from services.firebase.account_state import account_id_matches
 from services.ai_errors import (
     AIAuthenticationError,
+    AIAuthorizationError,
+    AIBillingError,
     AIRateLimitError,
     AIServiceError,
 )
@@ -183,6 +185,8 @@ def _credential_error(provider, error, message, status_code, compatibility=False
     if compatibility:
         error = {
             "provider_key_invalid": "openai_key_invalid",
+            "provider_access_denied": "openai_access_denied",
+            "provider_billing_required": "openai_billing_required",
             "provider_rate_limited": "openai_rate_limited",
             "provider_unavailable": "openai_unavailable",
         }.get(error, error)
@@ -194,6 +198,13 @@ def _credential_error(provider, error, message, status_code, compatibility=False
     if not compatibility:
         payload["provider"] = provider
     return jsonify(payload), status_code
+
+
+def _provider_billing_message(provider):
+    return (
+        f"Your {provider_name(provider)} API account needs available credit "
+        "or a higher spending limit"
+    )
 
 
 def _put_ai_credential(provider, compatibility=False):
@@ -208,7 +219,15 @@ def _put_ai_credential(provider, compatibility=False):
     if not isinstance(data, dict):
         return jsonify(status="error", error="invalid_request"), 400
     try:
-        api_key = validate_api_key(provider, data.get("api_key"), email)
+        validation = validate_api_key(provider, data.get("api_key"), email)
+        if isinstance(validation, str):
+            # Preserve compatibility with custom provider adapters using the
+            # original string-only validation contract.
+            api_key = validation
+            validation_warning = None
+        else:
+            api_key = validation.api_key
+            validation_warning = validation.warning
         ciphertext = encrypt_api_key(
             api_key, email, provider=provider, aad_version=2
         )
@@ -228,6 +247,23 @@ def _put_ai_credential(provider, compatibility=False):
             "provider_key_invalid",
             f"{display_name} rejected this API key",
             422,
+            compatibility,
+        )
+    except AIAuthorizationError:
+        display_name = provider_name(provider)
+        return _credential_error(
+            provider,
+            "provider_access_denied",
+            f"{display_name} accepted the key but denied the required API access",
+            403,
+            compatibility,
+        )
+    except AIBillingError:
+        return _credential_error(
+            provider,
+            "provider_billing_required",
+            _provider_billing_message(provider),
+            402,
             compatibility,
         )
     except AIRateLimitError:
@@ -274,6 +310,15 @@ def _put_ai_credential(provider, compatibility=False):
     payload = {"status": "success", "credential": credential_status}
     if not compatibility:
         payload["provider"] = provider
+    if validation_warning == "provider_billing_required":
+        payload["warning"] = {
+            "code": validation_warning,
+            "message": (
+                f"The key was saved, but your {provider_name(provider)} API account "
+                "needs available credit or a higher spending limit "
+                "before AI features can run"
+            ),
+        }
     return jsonify(payload)
 
 
@@ -546,6 +591,23 @@ def nutrition_analyze():
             provider=provider,
             message=f"Your {provider_name(provider)} API key is no longer valid",
         ), 422
+    except AIAuthorizationError:
+        return jsonify(
+            status="error",
+            error="provider_access_denied",
+            provider=provider,
+            message=(
+                f"Your {provider_name(provider)} API key does not have the "
+                "required API access"
+            ),
+        ), 403
+    except AIBillingError:
+        return jsonify(
+            status="error",
+            error="provider_billing_required",
+            provider=provider,
+            message=_provider_billing_message(provider),
+        ), 402
     except AIRateLimitError:
         return jsonify(
             status="error",
@@ -636,6 +698,23 @@ def nutrition_recommend():
             provider=provider,
             message=f"Your {provider_name(provider)} API key is no longer valid",
         ), 422
+    except AIAuthorizationError:
+        return jsonify(
+            status="error",
+            error="provider_access_denied",
+            provider=provider,
+            message=(
+                f"Your {provider_name(provider)} API key does not have the "
+                "required API access"
+            ),
+        ), 403
+    except AIBillingError:
+        return jsonify(
+            status="error",
+            error="provider_billing_required",
+            provider=provider,
+            message=_provider_billing_message(provider),
+        ), 402
     except AIRateLimitError:
         return jsonify(
             status="error",

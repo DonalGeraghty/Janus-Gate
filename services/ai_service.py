@@ -3,25 +3,37 @@
 from importlib import import_module
 
 from .ai_catalog import default_model, is_supported_model, is_supported_provider
-from .ai_errors import AIAuthenticationError, AIRateLimitError, AIServiceError
+from .ai_errors import (
+    AIAuthenticationError,
+    AIAuthorizationError,
+    AIBillingError,
+    AIRateLimitError,
+    AIServiceError,
+)
 
 
 _PROVIDER_ADAPTERS = {
     "openai": {
         "module": ".openai_service",
         "authentication_error": "OpenAIAuthenticationError",
+        "authorization_error": "OpenAIAuthorizationError",
+        "billing_error": "OpenAIBillingError",
         "rate_limit_error": "OpenAIRateLimitError",
         "service_error": "OpenAIServiceError",
     },
     "mistral": {
         "module": ".mistral_service",
         "authentication_error": "MistralAuthenticationError",
+        "authorization_error": "MistralAuthorizationError",
+        "billing_error": "MistralBillingError",
         "rate_limit_error": "MistralRateLimitError",
         "service_error": "MistralServiceError",
     },
     "anthropic": {
         "module": ".anthropic_service",
         "authentication_error": "AnthropicAuthenticationError",
+        "authorization_error": "AnthropicAuthorizationError",
+        "billing_error": "AnthropicBillingError",
         "rate_limit_error": "AnthropicRateLimitError",
         "service_error": "AnthropicServiceError",
     },
@@ -50,6 +62,10 @@ def _call_provider(provider, operation, *args, **kwargs):
     authentication_error = getattr(
         adapter, specification["authentication_error"]
     )
+    authorization_error = getattr(
+        adapter, specification["authorization_error"]
+    )
+    billing_error = getattr(adapter, specification["billing_error"])
     rate_limit_error = getattr(adapter, specification["rate_limit_error"])
     service_error = getattr(adapter, specification["service_error"])
 
@@ -57,6 +73,10 @@ def _call_provider(provider, operation, *args, **kwargs):
         return getattr(adapter, operation)(*args, **kwargs)
     except authentication_error as error:
         raise AIAuthenticationError("Provider API key is invalid") from error
+    except authorization_error as error:
+        raise AIAuthorizationError("Provider API access is denied") from error
+    except billing_error as error:
+        raise AIBillingError("Provider billing or credit is required") from error
     except rate_limit_error as error:
         raise AIRateLimitError("Provider rate limit reached") from error
     except service_error as error:

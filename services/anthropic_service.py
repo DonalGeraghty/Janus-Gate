@@ -19,7 +19,14 @@ from .ai_contract import (
     MealAnalysis,
     MealRecommendation,
 )
-from .ai_errors import AIAuthenticationError, AIRateLimitError, AIServiceError
+from .ai_errors import (
+    AIAuthenticationError,
+    AIAuthorizationError,
+    AIBillingError,
+    AIRateLimitError,
+    AIServiceError,
+)
+from .ai_validation import AICredentialValidation, BILLING_REQUIRED
 
 
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5"
@@ -35,6 +42,14 @@ class AnthropicAuthenticationError(AIAuthenticationError):
     pass
 
 
+class AnthropicAuthorizationError(AIAuthorizationError):
+    pass
+
+
+class AnthropicBillingError(AIBillingError):
+    pass
+
+
 class AnthropicRateLimitError(AIRateLimitError):
     pass
 
@@ -45,11 +60,17 @@ class AnthropicServiceError(AIServiceError):
 
 def _raise_mapped_anthropic_error(error):
     status_code = getattr(error, "status_code", None)
-    if isinstance(error, (AuthenticationError, PermissionDeniedError)) or (
-        status_code in (401, 403)
-    ):
+    if isinstance(error, AuthenticationError) or status_code == 401:
         raise AnthropicAuthenticationError(
             "Anthropic API key is invalid or unauthorized"
+        ) from error
+    if status_code == 402:
+        raise AnthropicBillingError(
+            "Anthropic billing or credit is required"
+        ) from error
+    if isinstance(error, PermissionDeniedError) or status_code == 403:
+        raise AnthropicAuthorizationError(
+            "Anthropic API access is denied"
         ) from error
     if isinstance(error, RateLimitError) or status_code == 429:
         raise AnthropicRateLimitError("Anthropic rate limit reached") from error
@@ -99,7 +120,6 @@ def validate_api_key(api_key, email=None, model=None):
     """Validate a user-owned key without sending user data or generating output."""
 
     api_key = _normalize_api_key(api_key)
-    model = _model_name(model)
 
     try:
         with Anthropic(
@@ -107,18 +127,17 @@ def validate_api_key(api_key, email=None, model=None):
             max_retries=0,
             timeout=KEY_VALIDATION_TIMEOUT_SECONDS,
         ) as client:
-            client.messages.count_tokens(
-                model=model,
-                messages=[{"role": "user", "content": "Hello"}],
-            )
+            client.models.list(limit=1)
     except (
         AnthropicError,
         ValidationError,
         json.JSONDecodeError,
         TypeError,
     ) as error:
+        if getattr(error, "status_code", None) == 402:
+            return AICredentialValidation(api_key, BILLING_REQUIRED)
         _raise_mapped_anthropic_error(error)
-    return api_key
+    return AICredentialValidation(api_key)
 
 
 def analyze_meal(message, email, api_key, model=None):
