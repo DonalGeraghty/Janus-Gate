@@ -690,6 +690,13 @@ def nutrition_entries_list():
 
     date_value = None
     date_text = request.args.get("date")
+    all_text = request.args.get("all")
+    if all_text not in (None, "true"):
+        return jsonify(
+            status="error",
+            error="All must be true when supplied",
+        ), 400
+    all_entries_requested = all_text == "true"
     if date_text:
         try:
             date_value = datetime.strptime(date_text, "%Y-%m-%d").date()
@@ -700,6 +707,16 @@ def nutrition_entries_list():
     end_value = None
     start_text = request.args.get("start")
     end_text = request.args.get("end")
+    if all_entries_requested and (
+        date_text
+        or start_text
+        or end_text
+        or request.args.get("limit") is not None
+    ):
+        return jsonify(
+            status="error",
+            error="All cannot be combined with date, start/end, or limit",
+        ), 400
     if bool(start_text) != bool(end_text):
         return jsonify(
             status="error",
@@ -743,21 +760,24 @@ def nutrition_entries_list():
                 error="Date range cannot exceed eight days",
             ), 400
 
-    range_requested = start_value is not None
-    default_limit = "500" if range_requested else "50"
-    maximum_limit = 500 if range_requested else 100
-    try:
-        limit = min(
-            max(int(request.args.get("limit", default_limit)), 1),
-            maximum_limit,
-        )
-    except ValueError:
-        return jsonify(status="error", error="Limit must be a number"), 400
+    if all_entries_requested:
+        limit = None
+    else:
+        range_requested = start_value is not None
+        default_limit = "500" if range_requested else "50"
+        maximum_limit = 500 if range_requested else 100
+        try:
+            limit = min(
+                max(int(request.args.get("limit", default_limit)), 1),
+                maximum_limit,
+            )
+        except ValueError:
+            return jsonify(status="error", error="Limit must be a number"), 400
 
     ok, error, entries = list_nutrition_entries(
         email=email,
         date_value=date_value,
-        limit=limit + 1,
+        limit=None if all_entries_requested else limit + 1,
         account_id=identity["account_id"],
         start_value=start_value,
         end_value=end_value,
@@ -765,10 +785,11 @@ def nutrition_entries_list():
     if not ok:
         logger.error("Nutrition entry list failed for %s: %s", email, error)
         return jsonify(status="error", error="Could not load nutrition entries"), 500
-    truncated = len(entries) > limit
+    truncated = False if all_entries_requested else len(entries) > limit
+    response_entries = entries if all_entries_requested else entries[:limit]
     return jsonify(
         status="success",
-        entries=entries[:limit],
+        entries=response_entries,
         pagination={
             "start": start_value.isoformat() if start_value else None,
             "end": end_value.isoformat() if end_value else None,

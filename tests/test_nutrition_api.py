@@ -1,6 +1,6 @@
 import json
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Event, Thread
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -341,6 +341,34 @@ class NutritionApiTests(unittest.TestCase):
             "2026-07-26T23:00:00+00:00",
         )
 
+    def test_all_entries_scope_returns_complete_history_without_a_limit(self):
+        headers = self.register()
+        first_eaten_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        db_state.nutrition_entries_memory["user@example.com"] = {
+            f"entry-{index}": {
+                "items": SAMPLE_ANALYSIS["items"],
+                "total_calories": SAMPLE_ANALYSIS["total_calories"],
+                "total_protein_g": SAMPLE_ANALYSIS["total_protein_g"],
+                "eaten_at": first_eaten_at + timedelta(days=index),
+                "created_at": first_eaten_at + timedelta(days=index),
+                "source_message": None,
+            }
+            for index in range(101)
+        }
+
+        response = self.client.get(
+            "/api/nutrition/entries?all=true",
+            headers=headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(len(body["entries"]), 101)
+        self.assertIsNone(body["pagination"]["limit"])
+        self.assertFalse(body["pagination"]["truncated"])
+        self.assertEqual(body["entries"][0]["id"], "entry-100")
+        self.assertEqual(body["entries"][-1]["id"], "entry-0")
+
     def test_entry_range_parameters_are_validated(self):
         headers = self.register()
         invalid_queries = (
@@ -354,6 +382,9 @@ class NutritionApiTests(unittest.TestCase):
                 "&start=2026-07-27T00:00:00Z"
                 "&end=2026-08-03T00:00:00Z"
             ),
+            "?all=false",
+            "?all=true&limit=100",
+            "?all=true&date=2026-07-27",
         )
 
         for query in invalid_queries:

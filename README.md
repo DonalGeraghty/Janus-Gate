@@ -141,6 +141,8 @@ The entries list accepts:
 - `start=<ISO-8601>&end=<ISO-8601>` to select an inclusive/exclusive
   timezone-aware range of up to eight days; range requests default to a limit
   of `500`
+- `all=true` to return the complete nutrition history for an explicit export;
+  it cannot be combined with date, range, or limit parameters
 
 Use either `date` or `start`/`end`, not both. Range responses include
 `pagination.start`, `pagination.end`, `pagination.limit`, and

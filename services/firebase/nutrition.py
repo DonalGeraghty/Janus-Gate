@@ -178,7 +178,12 @@ def list_nutrition_entries(
             if start:
                 query = query.where(filter=FieldFilter("eaten_at", ">=", start))
                 query = query.where(filter=FieldFilter("eaten_at", "<", end))
-            query = query.order_by("eaten_at", direction=firestore.Query.DESCENDING).limit(limit)
+            query = query.order_by(
+                "eaten_at",
+                direction=firestore.Query.DESCENDING,
+            )
+            if limit is not None:
+                query = query.limit(limit)
             transaction = db_state.db.transaction()
             return firestore.transactional(
                 _list_nutrition_entries_in_transaction
@@ -212,7 +217,7 @@ def list_nutrition_entries(
                 continue
             entries.append(_serialize_entry(entry_id, data))
         entries.sort(key=lambda row: row["eaten_at"], reverse=True)
-        return True, None, entries[:limit]
+        return True, None, entries if limit is None else entries[:limit]
 
 
 def _delete_nutrition_entry_in_transaction(
