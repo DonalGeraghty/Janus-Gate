@@ -158,13 +158,15 @@ def list_nutrition_entries(
     date_value=None,
     limit=50,
     account_id=None,
+    start_value=None,
+    end_value=None,
 ):
     email_key = normalize_user_email(email)
     if not email_key:
         return False, "invalid_email", None
 
-    start = None
-    end = None
+    start = start_value
+    end = end_value
     if date_value:
         start = datetime.combine(date_value, datetime.min.time(), tzinfo=timezone.utc)
         end = start + timedelta(days=1)

@@ -2,7 +2,7 @@
 
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -690,21 +690,86 @@ def nutrition_entries_list():
         except ValueError:
             return jsonify(status="error", error="Date must use YYYY-MM-DD"), 400
 
+    start_value = None
+    end_value = None
+    start_text = request.args.get("start")
+    end_text = request.args.get("end")
+    if bool(start_text) != bool(end_text):
+        return jsonify(
+            status="error",
+            error="Start and end must be supplied together",
+        ), 400
+    if date_text and start_text:
+        return jsonify(
+            status="error",
+            error="Use either date or start/end, not both",
+        ), 400
+    if start_text and end_text:
+        try:
+            start_value = datetime.fromisoformat(
+                start_text.replace("Z", "+00:00")
+            )
+            end_value = datetime.fromisoformat(
+                end_text.replace("Z", "+00:00")
+            )
+            if (
+                start_value.tzinfo is None
+                or start_value.utcoffset() is None
+                or end_value.tzinfo is None
+                or end_value.utcoffset() is None
+            ):
+                raise ValueError
+            start_value = start_value.astimezone(timezone.utc)
+            end_value = end_value.astimezone(timezone.utc)
+        except ValueError:
+            return jsonify(
+                status="error",
+                error="Start and end must be timezone-aware ISO-8601 datetimes",
+            ), 400
+        if end_value <= start_value:
+            return jsonify(
+                status="error",
+                error="End must be later than start",
+            ), 400
+        if end_value - start_value > timedelta(days=8):
+            return jsonify(
+                status="error",
+                error="Date range cannot exceed eight days",
+            ), 400
+
+    range_requested = start_value is not None
+    default_limit = "500" if range_requested else "50"
+    maximum_limit = 500 if range_requested else 100
     try:
-        limit = min(max(int(request.args.get("limit", "50")), 1), 100)
+        limit = min(
+            max(int(request.args.get("limit", default_limit)), 1),
+            maximum_limit,
+        )
     except ValueError:
         return jsonify(status="error", error="Limit must be a number"), 400
 
     ok, error, entries = list_nutrition_entries(
-        email,
-        date_value,
-        limit,
-        identity["account_id"],
+        email=email,
+        date_value=date_value,
+        limit=limit + 1,
+        account_id=identity["account_id"],
+        start_value=start_value,
+        end_value=end_value,
     )
     if not ok:
         logger.error("Nutrition entry list failed for %s: %s", email, error)
         return jsonify(status="error", error="Could not load nutrition entries"), 500
-    return jsonify(status="success", entries=entries)
+    truncated = len(entries) > limit
+    return jsonify(
+        status="success",
+        entries=entries[:limit],
+        pagination={
+            "start": start_value.isoformat() if start_value else None,
+            "end": end_value.isoformat() if end_value else None,
+            "limit": limit,
+            "truncated": truncated,
+        },
+    )
 
 
 @app.delete("/api/nutrition/entries/<entry_id>")

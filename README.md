@@ -135,6 +135,13 @@ The entries list accepts:
 
 - `date=YYYY-MM-DD` to select one UTC calendar day
 - `limit=1..100`, defaulting to `50`
+- `start=<ISO-8601>&end=<ISO-8601>` to select an inclusive/exclusive
+  timezone-aware range of up to eight days; range requests default to a limit
+  of `500`
+
+Use either `date` or `start`/`end`, not both. Range responses include
+`pagination.start`, `pagination.end`, `pagination.limit`, and
+`pagination.truncated`.
 
 AI settings accept only these provider/model combinations:
 

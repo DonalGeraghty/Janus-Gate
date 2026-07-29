@@ -299,6 +299,99 @@ class NutritionApiTests(unittest.TestCase):
         response = self.client.get("/api/nutrition/entries?date=2026-07-21", headers=headers)
         self.assertEqual(response.get_json()["entries"], [])
 
+    def test_entries_can_be_listed_by_timezone_aware_range(self):
+        headers = self.register()
+        for eaten_at in (
+            "2026-07-26T22:59:59Z",
+            "2026-07-26T23:00:00Z",
+            "2026-08-02T22:59:59Z",
+            "2026-08-02T23:00:00Z",
+        ):
+            self.client.post(
+                "/api/nutrition/entries",
+                headers=headers,
+                json={
+                    "items": SAMPLE_ANALYSIS["items"],
+                    "eaten_at": eaten_at,
+                },
+            )
+
+        response = self.client.get(
+            (
+                "/api/nutrition/entries"
+                "?start=2026-07-27T00:00:00%2B01:00"
+                "&end=2026-08-03T00:00:00%2B01:00"
+            ),
+            headers=headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(
+            [entry["eaten_at"] for entry in body["entries"]],
+            [
+                "2026-08-02T22:59:59+00:00",
+                "2026-07-26T23:00:00+00:00",
+            ],
+        )
+        self.assertEqual(body["pagination"]["limit"], 500)
+        self.assertFalse(body["pagination"]["truncated"])
+        self.assertEqual(
+            body["pagination"]["start"],
+            "2026-07-26T23:00:00+00:00",
+        )
+
+    def test_entry_range_parameters_are_validated(self):
+        headers = self.register()
+        invalid_queries = (
+            "?start=2026-07-27T00:00:00Z",
+            "?end=2026-08-03T00:00:00Z",
+            "?start=2026-07-27T00:00:00&end=2026-08-03T00:00:00",
+            "?start=2026-08-03T00:00:00Z&end=2026-07-27T00:00:00Z",
+            "?start=2026-07-01T00:00:00Z&end=2026-08-01T00:00:00Z",
+            (
+                "?date=2026-07-27"
+                "&start=2026-07-27T00:00:00Z"
+                "&end=2026-08-03T00:00:00Z"
+            ),
+        )
+
+        for query in invalid_queries:
+            with self.subTest(query=query):
+                response = self.client.get(
+                    f"/api/nutrition/entries{query}",
+                    headers=headers,
+                )
+                self.assertEqual(response.status_code, 400)
+
+    def test_entry_range_reports_when_its_limit_is_truncated(self):
+        headers = self.register()
+        for hour in (8, 12):
+            self.client.post(
+                "/api/nutrition/entries",
+                headers=headers,
+                json={
+                    "items": SAMPLE_ANALYSIS["items"],
+                    "eaten_at": f"2026-07-27T{hour:02d}:00:00Z",
+                },
+            )
+
+        response = self.client.get(
+            (
+                "/api/nutrition/entries"
+                "?start=2026-07-27T00:00:00Z"
+                "&end=2026-08-03T00:00:00Z"
+                "&limit=1"
+            ),
+            headers=headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(len(body["entries"]), 1)
+        self.assertEqual(body["pagination"]["limit"], 1)
+        self.assertTrue(body["pagination"]["truncated"])
+
     def test_entries_are_isolated_by_user(self):
         first_headers = self.register("first@example.com")
         self.client.post(
