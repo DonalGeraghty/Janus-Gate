@@ -103,7 +103,7 @@ jobs:
             --cpu 1 \
             --max-instances 10 \
             --timeout 300 \
-            --set-env-vars "FLASK_ENV=production,JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }},OPENAI_MODEL=gpt-5.6-sol,MISTRAL_MODEL=mistral-small-2603,AI_KMS_KEY_NAME=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/keyRings/janus-gate/cryptoKeys/user-openai-keys"
+            --set-env-vars "FLASK_ENV=production,JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }},OPENAI_MODEL=gpt-5.6-sol,MISTRAL_MODEL=mistral-small-2603,ANTHROPIC_MODEL=claude-sonnet-5,AI_KMS_KEY_NAME=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/keyRings/janus-gate/cryptoKeys/user-openai-keys"
             
       - name: Get service URL
         id: service-url

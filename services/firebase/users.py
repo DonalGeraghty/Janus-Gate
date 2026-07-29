@@ -19,10 +19,7 @@ from .account_state import (
 )
 from .core import normalize_user_email
 from .nutrition import delete_nutrition_entries
-from .openai_credentials import (
-    delete_ai_credential_for_account_deletion,
-    delete_openai_credential,
-)
+from .openai_credentials import delete_all_ai_credentials
 from ..logging_service import logger
 
 
@@ -474,21 +471,12 @@ def delete_user_account(email, expected_account_id):
     if not marked:
         return False, "delete_failed"
 
-    credential_deleted, _ = delete_openai_credential(
+    credentials_deleted, _ = delete_all_ai_credentials(
         email_key,
         expected_account_id,
         deletion_token,
     )
-    if not credential_deleted:
-        return False, "delete_failed"
-
-    credential_deleted, _ = delete_ai_credential_for_account_deletion(
-        email_key,
-        "mistral",
-        expected_account_id,
-        deletion_token,
-    )
-    if not credential_deleted:
+    if not credentials_deleted:
         return False, "delete_failed"
 
     if not delete_nutrition_entries(

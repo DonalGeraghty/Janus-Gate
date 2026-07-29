@@ -1,12 +1,13 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from app import app
 from services import ai_service
 from services.ai_errors import AIRateLimitError, AIServiceError
 from services.firebase import db_state
 from services.firebase.users import _save_ai_selection_in_transaction
+from services.anthropic_service import AnthropicRateLimitError
 from services.mistral_service import MistralRateLimitError
 
 
@@ -14,6 +15,11 @@ MISTRAL_KEY = "mistral-user-key-1234567890-Ab12"
 MISTRAL_SELECTION = {
     "provider": "mistral",
     "model": "mistral-small-2603",
+}
+ANTHROPIC_KEY = "sk-ant-api03-user-key-1234567890-Cd34"
+ANTHROPIC_SELECTION = {
+    "provider": "anthropic",
+    "model": "claude-sonnet-5",
 }
 SAMPLE_ANALYSIS = {
     "items": [
@@ -57,12 +63,16 @@ class AISettingsApiTests(unittest.TestCase):
             ).status_code,
             401,
         )
-        for method in ("get", "put", "delete"):
-            response = getattr(self.client, method)(
-                "/api/user/ai-credentials/mistral",
-                json={"api_key": MISTRAL_KEY} if method == "put" else None,
-            )
-            self.assertEqual(response.status_code, 401)
+        for provider, api_key in (
+            ("mistral", MISTRAL_KEY),
+            ("anthropic", ANTHROPIC_KEY),
+        ):
+            for method in ("get", "put", "delete"):
+                response = getattr(self.client, method)(
+                    f"/api/user/ai-credentials/{provider}",
+                    json={"api_key": api_key} if method == "put" else None,
+                )
+                self.assertEqual(response.status_code, 401)
 
     def test_settings_return_catalog_selection_and_safe_statuses(self):
         headers = self.register()
@@ -89,7 +99,7 @@ class AISettingsApiTests(unittest.TestCase):
         )
         self.assertEqual(
             [provider["id"] for provider in payload["providers"]],
-            ["openai", "mistral"],
+            ["openai", "mistral", "anthropic"],
         )
         self.assertEqual(
             [model["id"] for model in payload["providers"][0]["models"]],
@@ -103,9 +113,22 @@ class AISettingsApiTests(unittest.TestCase):
                 "mistral-medium-3-5",
             ],
         )
+        self.assertEqual(payload["providers"][2]["name"], "Claude (Anthropic)")
+        self.assertEqual(
+            [model["id"] for model in payload["providers"][2]["models"]],
+            [
+                "claude-sonnet-5",
+                "claude-opus-5",
+                "claude-haiku-4-5-20251001",
+            ],
+        )
         self.assertTrue(payload["providers"][0]["credential"]["configured"])
         self.assertEqual(
             payload["providers"][1]["credential"],
+            {"configured": False},
+        )
+        self.assertEqual(
+            payload["providers"][2]["credential"],
             {"configured": False},
         )
         self.assertNotIn("ciphertext", response.get_data(as_text=True))
@@ -183,6 +206,69 @@ class AISettingsApiTests(unittest.TestCase):
             "Ab12",
             aad_version=2,
             account_id=db_state.auth_users_memory["user@example.com"]["account_id"],
+        )
+
+    def test_anthropic_key_uses_provider_scoped_v2_encryption(self):
+        headers = self.register()
+        status = {
+            "configured": True,
+            "last_four": "Cd34",
+            "verified_at": "2026-07-29T12:00:00+00:00",
+        }
+        with (
+            patch(
+                "app.validate_api_key", return_value=ANTHROPIC_KEY
+            ) as validate_mock,
+            patch(
+                "app.encrypt_api_key",
+                return_value="anthropic-ciphertext",
+            ) as encrypt_mock,
+            patch(
+                "app.save_ai_credential",
+                return_value=(True, None, status),
+            ) as save_mock,
+        ):
+            response = self.client.put(
+                "/api/user/ai-credentials/anthropic",
+                headers=headers,
+                json={"api_key": ANTHROPIC_KEY},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["provider"], "anthropic")
+        self.assertNotIn(ANTHROPIC_KEY, response.get_data(as_text=True))
+        self.assertNotIn("anthropic-ciphertext", response.get_data(as_text=True))
+        validate_mock.assert_called_once_with(
+            "anthropic", ANTHROPIC_KEY, "user@example.com"
+        )
+        encrypt_mock.assert_called_once_with(
+            ANTHROPIC_KEY,
+            "user@example.com",
+            provider="anthropic",
+            aad_version=2,
+        )
+        save_mock.assert_called_once_with(
+            "user@example.com",
+            "anthropic",
+            "anthropic-ciphertext",
+            "Cd34",
+            aad_version=2,
+            account_id=db_state.auth_users_memory["user@example.com"]["account_id"],
+        )
+
+    def test_anthropic_validation_error_uses_provider_display_name(self):
+        headers = self.register()
+        with patch("app.validate_api_key", side_effect=ValueError("invalid_api_key")):
+            response = self.client.put(
+                "/api/user/ai-credentials/anthropic",
+                headers=headers,
+                json={"api_key": "bad"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.get_json()["message"],
+            "A valid Claude (Anthropic) API key is required",
         )
 
     def test_invalid_provider_path_is_rejected_before_provider_call(self):
@@ -324,6 +410,50 @@ class AISettingsApiTests(unittest.TestCase):
             "mistral-small-2603",
         )
 
+    def test_analysis_routes_through_selected_anthropic_model_and_v2_aad(self):
+        headers = self.register()
+        response = self.client.put(
+            "/api/user/ai-settings",
+            headers=headers,
+            json=ANTHROPIC_SELECTION,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        with (
+            patch(
+                "app.get_ai_credential",
+                return_value=(
+                    True,
+                    None,
+                    {"ciphertext": "encrypted-anthropic", "aad_version": 2},
+                ),
+            ),
+            patch(
+                "app.decrypt_api_key", return_value=ANTHROPIC_KEY
+            ) as decrypt_mock,
+            patch("app.analyze_meal", return_value=SAMPLE_ANALYSIS) as analyze_mock,
+        ):
+            response = self.client.post(
+                "/api/nutrition/analyze",
+                headers=headers,
+                json={"message": "Two eggs and toast"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        decrypt_mock.assert_called_once_with(
+            "encrypted-anthropic",
+            "user@example.com",
+            provider="anthropic",
+            aad_version=2,
+        )
+        analyze_mock.assert_called_once_with(
+            "Two eggs and toast",
+            "user@example.com",
+            ANTHROPIC_KEY,
+            "anthropic",
+            "claude-sonnet-5",
+        )
+
     def test_legacy_openai_credential_without_aad_version_uses_v1(self):
         headers = self.register()
         with (
@@ -401,18 +531,13 @@ class AISettingsApiTests(unittest.TestCase):
         self.assertEqual(response.get_json()["error"], "provider_unavailable")
         self.assertEqual(response.get_json()["provider"], "mistral")
 
-    def test_account_deletion_cleans_both_provider_credentials(self):
+    def test_account_deletion_cleans_all_provider_credentials(self):
         headers = self.register()
-        with (
-            patch(
-                "services.firebase.users.delete_openai_credential",
-                return_value=(True, None),
-            ) as openai_delete,
-            patch(
-                "services.firebase.users.delete_ai_credential_for_account_deletion",
-                return_value=(True, None),
-            ) as provider_delete,
-        ):
+        account_id = db_state.auth_users_memory["user@example.com"]["account_id"]
+        with patch(
+            "services.firebase.users.delete_all_ai_credentials",
+            return_value=(True, None),
+        ) as delete_all:
             response = self.client.delete(
                 "/api/auth/account",
                 headers=headers,
@@ -420,12 +545,10 @@ class AISettingsApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        openai_delete.assert_called_once()
-        self.assertEqual(openai_delete.call_args.args[0], "user@example.com")
-        provider_delete.assert_called_once()
-        self.assertEqual(
-            provider_delete.call_args.args[:2],
-            ("user@example.com", "mistral"),
+        delete_all.assert_called_once_with(
+            "user@example.com",
+            account_id,
+            ANY,
         )
 
 
@@ -460,6 +583,38 @@ class AIServiceDispatchTests(unittest.TestCase):
                 MISTRAL_KEY,
                 "mistral",
                 "mistral-small-2603",
+            )
+
+    @patch("services.anthropic_service.analyze_meal", return_value=SAMPLE_ANALYSIS)
+    def test_anthropic_model_is_forwarded_by_dispatcher(self, analyze_mock):
+        result = ai_service.analyze_meal(
+            "Two eggs",
+            "user@example.com",
+            ANTHROPIC_KEY,
+            "anthropic",
+            "claude-opus-5",
+        )
+
+        self.assertEqual(result, SAMPLE_ANALYSIS)
+        analyze_mock.assert_called_once_with(
+            "Two eggs",
+            "user@example.com",
+            ANTHROPIC_KEY,
+            "claude-opus-5",
+        )
+
+    @patch(
+        "services.anthropic_service.analyze_meal",
+        side_effect=AnthropicRateLimitError(),
+    )
+    def test_anthropic_errors_are_normalized(self, _analyze_mock):
+        with self.assertRaises(AIRateLimitError):
+            ai_service.analyze_meal(
+                "Two eggs",
+                "user@example.com",
+                ANTHROPIC_KEY,
+                "anthropic",
+                "claude-sonnet-5",
             )
 
 

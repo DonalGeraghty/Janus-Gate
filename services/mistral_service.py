@@ -6,7 +6,7 @@ import httpx
 from mistralai.client import Mistral, errors
 from pydantic import ValidationError
 
-from .openai_service import (
+from .ai_contract import (
     MAX_MEAL_MESSAGE_LENGTH,
     MEAL_ANALYSIS_PROMPT,
     MEAL_RECOMMENDATION_PROMPT,

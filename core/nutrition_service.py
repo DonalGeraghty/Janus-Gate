@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from services.openai_service import FoodItem, MAX_MEAL_MESSAGE_LENGTH
+from services.ai_contract import FoodItem, MAX_MEAL_MESSAGE_LENGTH
 
 
 class NutritionEntryInput(BaseModel):

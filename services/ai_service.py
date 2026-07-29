@@ -1,8 +1,31 @@
 """Provider-neutral dispatch for AI-backed nutrition operations."""
 
+from importlib import import_module
+
 from .ai_catalog import default_model, is_supported_model, is_supported_provider
 from .ai_errors import AIAuthenticationError, AIRateLimitError, AIServiceError
-from . import openai_service
+
+
+_PROVIDER_ADAPTERS = {
+    "openai": {
+        "module": ".openai_service",
+        "authentication_error": "OpenAIAuthenticationError",
+        "rate_limit_error": "OpenAIRateLimitError",
+        "service_error": "OpenAIServiceError",
+    },
+    "mistral": {
+        "module": ".mistral_service",
+        "authentication_error": "MistralAuthenticationError",
+        "rate_limit_error": "MistralRateLimitError",
+        "service_error": "MistralServiceError",
+    },
+    "anthropic": {
+        "module": ".anthropic_service",
+        "authentication_error": "AnthropicAuthenticationError",
+        "rate_limit_error": "AnthropicRateLimitError",
+        "service_error": "AnthropicServiceError",
+    },
+}
 
 
 def _validated_model(provider, model):
@@ -12,81 +35,66 @@ def _validated_model(provider, model):
     return model
 
 
-def validate_provider_api_key(provider, api_key, email=None):
+def _provider_adapter(provider):
     if not is_supported_provider(provider):
         raise ValueError("invalid_provider")
+    try:
+        specification = _PROVIDER_ADAPTERS[provider]
+    except KeyError as error:
+        raise ValueError("invalid_provider") from error
+    return import_module(specification["module"], package=__package__), specification
 
-    if provider == "openai":
-        try:
-            return openai_service.validate_api_key(api_key, email)
-        except openai_service.OpenAIAuthenticationError as error:
-            raise AIAuthenticationError("Provider API key is invalid") from error
-        except openai_service.OpenAIRateLimitError as error:
-            raise AIRateLimitError("Provider rate limit reached") from error
-        except openai_service.OpenAIServiceError as error:
-            raise AIServiceError("Provider request failed") from error
 
-    from . import mistral_service
+def _call_provider(provider, operation, *args, **kwargs):
+    adapter, specification = _provider_adapter(provider)
+    authentication_error = getattr(
+        adapter, specification["authentication_error"]
+    )
+    rate_limit_error = getattr(adapter, specification["rate_limit_error"])
+    service_error = getattr(adapter, specification["service_error"])
 
     try:
-        return mistral_service.validate_api_key(api_key, email=email)
-    except mistral_service.MistralAuthenticationError as error:
+        return getattr(adapter, operation)(*args, **kwargs)
+    except authentication_error as error:
         raise AIAuthenticationError("Provider API key is invalid") from error
-    except mistral_service.MistralRateLimitError as error:
+    except rate_limit_error as error:
         raise AIRateLimitError("Provider rate limit reached") from error
-    except mistral_service.MistralServiceError as error:
+    except service_error as error:
         raise AIServiceError("Provider request failed") from error
+
+
+def validate_provider_api_key(provider, api_key, email=None):
+    return _call_provider(
+        provider,
+        "validate_api_key",
+        api_key,
+        email=email,
+    )
 
 
 def analyze_meal(message, email, api_key, provider="openai", model=None):
     if not is_supported_provider(provider):
         raise ValueError("invalid_provider")
     model = _validated_model(provider, model)
-
-    if provider == "openai":
-        try:
-            return openai_service.analyze_meal(message, email, api_key, model)
-        except openai_service.OpenAIAuthenticationError as error:
-            raise AIAuthenticationError("Provider API key is invalid") from error
-        except openai_service.OpenAIRateLimitError as error:
-            raise AIRateLimitError("Provider rate limit reached") from error
-        except openai_service.OpenAIServiceError as error:
-            raise AIServiceError("Provider request failed") from error
-
-    from . import mistral_service
-
-    try:
-        return mistral_service.analyze_meal(message, email, api_key, model)
-    except mistral_service.MistralAuthenticationError as error:
-        raise AIAuthenticationError("Provider API key is invalid") from error
-    except mistral_service.MistralRateLimitError as error:
-        raise AIRateLimitError("Provider rate limit reached") from error
-    except mistral_service.MistralServiceError as error:
-        raise AIServiceError("Provider request failed") from error
+    return _call_provider(
+        provider,
+        "analyze_meal",
+        message,
+        email,
+        api_key,
+        model,
+    )
 
 
 def recommend_meals(context, email, api_key, provider="openai", model=None):
     if not is_supported_provider(provider):
         raise ValueError("invalid_provider")
     model = _validated_model(provider, model)
-
-    if provider == "openai":
-        try:
-            return openai_service.recommend_meals(context, email, api_key, model)
-        except openai_service.OpenAIAuthenticationError as error:
-            raise AIAuthenticationError("Provider API key is invalid") from error
-        except openai_service.OpenAIRateLimitError as error:
-            raise AIRateLimitError("Provider rate limit reached") from error
-        except openai_service.OpenAIServiceError as error:
-            raise AIServiceError("Provider request failed") from error
-
-    from . import mistral_service
-
-    try:
-        return mistral_service.recommend_meals(context, email, api_key, model)
-    except mistral_service.MistralAuthenticationError as error:
-        raise AIAuthenticationError("Provider API key is invalid") from error
-    except mistral_service.MistralRateLimitError as error:
-        raise AIRateLimitError("Provider rate limit reached") from error
-    except mistral_service.MistralServiceError as error:
-        raise AIServiceError("Provider request failed") from error
+    return _call_provider(
+        provider,
+        "recommend_meals",
+        context,
+        email,
+        api_key,
+        model,
+    )

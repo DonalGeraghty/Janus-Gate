@@ -36,6 +36,7 @@ from services.ai_catalog import (
     SUPPORTED_PROVIDERS,
     is_supported_model,
     is_supported_provider,
+    provider_name,
     public_provider_catalog,
 )
 from services.firebase.account_state import account_id_matches
@@ -50,7 +51,7 @@ from services.ai_service import (
     validate_provider_api_key as validate_api_key,
 )
 from services.logging_service import get_flask_app_logger
-from services.openai_service import MAX_MEAL_MESSAGE_LENGTH
+from services.ai_contract import MAX_MEAL_MESSAGE_LENGTH
 
 
 logger = get_flask_app_logger()
@@ -212,20 +213,20 @@ def _put_ai_credential(provider, compatibility=False):
             api_key, email, provider=provider, aad_version=2
         )
     except ValueError:
-        provider_name = "OpenAI" if provider == "openai" else "Mistral AI"
+        display_name = provider_name(provider)
         return _credential_error(
             provider,
             "invalid_api_key",
-            f"A valid {provider_name} API key is required",
+            f"A valid {display_name} API key is required",
             400,
             compatibility,
         )
     except AIAuthenticationError:
-        provider_name = "OpenAI" if provider == "openai" else "Mistral AI"
+        display_name = provider_name(provider)
         return _credential_error(
             provider,
             "provider_key_invalid",
-            f"{provider_name} rejected this API key",
+            f"{display_name} rejected this API key",
             422,
             compatibility,
         )
@@ -509,7 +510,9 @@ def nutrition_analyze():
             status="error",
             error="provider_key_required",
             provider=provider,
-            message=f"Add a {provider} API key before analyzing meals",
+            message=(
+                f"Add your {provider_name(provider)} API key before analyzing meals"
+            ),
         ), 409
 
     provider = selection["provider"]
@@ -541,7 +544,7 @@ def nutrition_analyze():
             status="error",
             error="provider_key_invalid",
             provider=provider,
-            message=f"Your {provider} API key is no longer valid",
+            message=f"Your {provider_name(provider)} API key is no longer valid",
         ), 422
     except AIRateLimitError:
         return jsonify(
@@ -601,7 +604,10 @@ def nutrition_recommend():
             status="error",
             error="provider_key_required",
             provider=provider,
-            message=f"Add a {provider} API key before requesting meal recommendations",
+            message=(
+                f"Add your {provider_name(provider)} API key before requesting "
+                "meal recommendations"
+            ),
         ), 409
 
     provider = selection["provider"]
@@ -628,7 +634,7 @@ def nutrition_recommend():
             status="error",
             error="provider_key_invalid",
             provider=provider,
-            message=f"Your {provider} API key is no longer valid",
+            message=f"Your {provider_name(provider)} API key is no longer valid",
         ), 422
     except AIRateLimitError:
         return jsonify(

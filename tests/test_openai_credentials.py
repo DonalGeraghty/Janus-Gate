@@ -3,7 +3,7 @@ import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import ANY, Mock, patch
+from unittest.mock import ANY, Mock, call, patch
 
 from app import app
 from services.credential_service import decrypt_api_key, encrypt_api_key
@@ -13,6 +13,7 @@ from services.firebase.openai_credentials import (
     _delete_credential_for_account_deletion_in_transaction,
     _get_ai_credential_in_transaction,
     _save_ai_credential_in_transaction,
+    delete_all_ai_credentials,
 )
 from services.firebase.account_state import (
     ACCOUNT_DELETION_STARTED_AT_FIELD,
@@ -126,8 +127,10 @@ class OpenAICredentialApiTests(unittest.TestCase):
 
     def test_account_deletion_invokes_credential_cleanup(self):
         headers = self.register()
+        account_id = db_state.auth_users_memory["user@example.com"]["account_id"]
         with patch(
-            "services.firebase.users.delete_openai_credential", return_value=(True, None)
+            "services.firebase.users.delete_all_ai_credentials",
+            return_value=(True, None),
         ) as delete_mock:
             response = self.client.delete(
                 "/api/auth/account",
@@ -137,7 +140,7 @@ class OpenAICredentialApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         delete_mock.assert_called_once_with(
             "user@example.com",
-            ANY,
+            account_id,
             ANY,
         )
 
@@ -154,14 +157,9 @@ class OpenAICredentialApiTests(unittest.TestCase):
             self.assertIsNone(get_user_record(email))
             return False, "database_error"
 
-        with (
-            patch(
-                "services.firebase.users.delete_openai_credential",
-                side_effect=fail_after_tombstone,
-            ),
-            patch(
-                "services.firebase.users.delete_ai_credential_for_account_deletion"
-            ) as mistral_delete,
+        with patch(
+            "services.firebase.users.delete_all_ai_credentials",
+            side_effect=fail_after_tombstone,
         ):
             response = self.client.delete(
                 "/api/auth/account",
@@ -170,7 +168,6 @@ class OpenAICredentialApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 500)
-        mistral_delete.assert_not_called()
         user = db_state.auth_users_memory["user@example.com"]
         self.assertTrue(user[ACCOUNT_DELETION_FIELD])
         self.assertEqual(
@@ -178,15 +175,9 @@ class OpenAICredentialApiTests(unittest.TestCase):
             401,
         )
 
-        with (
-            patch(
-                "services.firebase.users.delete_openai_credential",
-                return_value=(True, None),
-            ),
-            patch(
-                "services.firebase.users.delete_ai_credential_for_account_deletion",
-                return_value=(True, None),
-            ),
+        with patch(
+            "services.firebase.users.delete_all_ai_credentials",
+            return_value=(True, None),
         ):
             retry = self.client.delete(
                 "/api/auth/account",
@@ -205,19 +196,50 @@ class OpenAICredentialApiTests(unittest.TestCase):
             datetime.now(timezone.utc) - timedelta(hours=1)
         )
 
-        with (
-            patch(
-                "services.firebase.users.delete_openai_credential",
-                return_value=(True, None),
-            ),
-            patch(
-                "services.firebase.users.delete_ai_credential_for_account_deletion",
-                return_value=(True, None),
-            ),
+        with patch(
+            "services.firebase.users.delete_all_ai_credentials",
+            return_value=(True, None),
         ):
             self.assertIsNone(get_user_record("user@example.com"))
 
         self.assertNotIn("user@example.com", db_state.auth_users_memory)
+
+    @patch(
+        "services.firebase.openai_credentials.delete_ai_credential_for_account_deletion",
+        return_value=(True, None),
+    )
+    def test_all_provider_credentials_are_deleted(self, delete_mock):
+        deleted, error = delete_all_ai_credentials(
+            "user@example.com",
+            "account-id",
+            "deletion-token",
+        )
+
+        self.assertTrue(deleted)
+        self.assertIsNone(error)
+        self.assertEqual(
+            delete_mock.call_args_list,
+            [
+                call(
+                    "user@example.com",
+                    "openai",
+                    "account-id",
+                    "deletion-token",
+                ),
+                call(
+                    "user@example.com",
+                    "mistral",
+                    "account-id",
+                    "deletion-token",
+                ),
+                call(
+                    "user@example.com",
+                    "anthropic",
+                    "account-id",
+                    "deletion-token",
+                ),
+            ],
+        )
 
 
 class CredentialPersistenceRaceTests(unittest.TestCase):
@@ -380,6 +402,40 @@ class KmsCredentialServiceTests(unittest.TestCase):
 
         self.assertEqual(plaintext, USER_KEY)
         expected_aad = b"janus-gate:api-key:v2:user@example.com:mistral"
+        self.assertEqual(
+            client.encrypt.call_args.kwargs["request"]["additional_authenticated_data"],
+            expected_aad,
+        )
+        self.assertEqual(
+            client.decrypt.call_args.kwargs["request"]["additional_authenticated_data"],
+            expected_aad,
+        )
+
+    @patch.dict(
+        os.environ,
+        {"AI_KMS_KEY_NAME": "projects/test/locations/europe-west1/keyRings/janus/cryptoKeys/users"},
+    )
+    @patch("services.credential_service.kms.KeyManagementServiceClient")
+    def test_v2_aad_supports_anthropic_provider(self, client_class):
+        client = client_class.return_value
+        client.encrypt.return_value = SimpleNamespace(ciphertext=b"encrypted-key")
+        client.decrypt.return_value = SimpleNamespace(plaintext=USER_KEY.encode("utf-8"))
+
+        ciphertext = encrypt_api_key(
+            USER_KEY,
+            "User@Example.com",
+            provider="anthropic",
+            aad_version=2,
+        )
+        plaintext = decrypt_api_key(
+            ciphertext,
+            "user@example.com",
+            provider="anthropic",
+            aad_version=2,
+        )
+
+        self.assertEqual(plaintext, USER_KEY)
+        expected_aad = b"janus-gate:api-key:v2:user@example.com:anthropic"
         self.assertEqual(
             client.encrypt.call_args.kwargs["request"]["additional_authenticated_data"],
             expected_aad,

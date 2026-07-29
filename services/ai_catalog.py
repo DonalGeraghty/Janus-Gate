@@ -46,9 +46,33 @@ PROVIDER_CATALOG = (
             },
         ),
     },
+    {
+        "id": "anthropic",
+        "name": "Claude (Anthropic)",
+        "models": (
+            {
+                "id": "claude-sonnet-5",
+                "name": "Claude Sonnet 5",
+                "description": "Anthropic's balanced default model for nutrition requests.",
+            },
+            {
+                "id": "claude-opus-5",
+                "name": "Claude Opus 5",
+                "description": "Anthropic's most capable model for complex meal analysis.",
+            },
+            {
+                "id": "claude-haiku-4-5-20251001",
+                "name": "Claude Haiku 4.5",
+                "description": "Anthropic's fastest model for straightforward nutrition requests.",
+            },
+        ),
+    },
 )
 
 SUPPORTED_PROVIDERS = tuple(provider["id"] for provider in PROVIDER_CATALOG)
+_PROVIDER_NAMES = {
+    provider["id"]: provider["name"] for provider in PROVIDER_CATALOG
+}
 _MODELS_BY_PROVIDER = {
     provider["id"]: tuple(model["id"] for model in provider["models"])
     for provider in PROVIDER_CATALOG
@@ -56,15 +80,23 @@ _MODELS_BY_PROVIDER = {
 _FALLBACK_MODELS = {
     "openai": "gpt-5.6-sol",
     "mistral": "mistral-small-2603",
+    "anthropic": "claude-sonnet-5",
 }
 _MODEL_ENVIRONMENT_VARIABLES = {
     "openai": "OPENAI_MODEL",
     "mistral": "MISTRAL_MODEL",
+    "anthropic": "ANTHROPIC_MODEL",
 }
 
 
 def is_supported_provider(provider):
     return isinstance(provider, str) and provider in SUPPORTED_PROVIDERS
+
+
+def provider_name(provider):
+    if not is_supported_provider(provider):
+        raise ValueError("invalid_provider")
+    return _PROVIDER_NAMES[provider]
 
 
 def is_supported_model(provider, model):
