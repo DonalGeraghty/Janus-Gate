@@ -1,6 +1,7 @@
 """Janus Gate: a small user authentication API."""
 
 import os
+import hmac
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -10,6 +11,11 @@ from pydantic import ValidationError
 
 from core.auth_service import decode_access_token, login_user, register_user, verify_password
 from core.nutrition_service import MealRecommendationInput, NutritionEntryInput
+from core.push_service import (
+    PushSettingsInput,
+    PushSubscriptionDeleteInput,
+    PushSubscriptionInput,
+)
 from services.firebase_service import (
     create_nutrition_entry,
     delete_ai_credential,
@@ -22,6 +28,10 @@ from services.firebase_service import (
     get_user_record,
     get_user_record_for_account_deletion,
     list_nutrition_entries,
+    delete_push_subscription,
+    get_push_settings,
+    save_push_settings,
+    save_push_subscription,
     save_ai_credential,
     save_ai_selection,
     update_nutrition_entry,
@@ -53,6 +63,10 @@ from services.ai_service import (
     validate_provider_api_key as validate_api_key,
 )
 from services.logging_service import get_flask_app_logger
+from services.web_push_service import (
+    dispatch_due_reminders,
+    public_push_configuration,
+)
 from services.ai_contract import MAX_MEAL_MESSAGE_LENGTH
 
 
@@ -122,7 +136,10 @@ def auth_register():
     return jsonify(
         status="success",
         token=payload["token"],
-        user={"email": payload["email"]},
+        user={
+            "email": payload["email"],
+            "account_id": payload["account_id"],
+        },
     ), 201
 
 
@@ -138,7 +155,10 @@ def auth_login():
     return jsonify(
         status="success",
         token=payload["token"],
-        user={"email": payload["email"]},
+        user={
+            "email": payload["email"],
+            "account_id": payload["account_id"],
+        },
     )
 
 
@@ -147,7 +167,13 @@ def auth_me():
     identity = _authenticated_identity()
     if not identity:
         return jsonify(status="error", error="Unauthorized"), 401
-    return jsonify(status="success", user={"email": identity["email"]})
+    return jsonify(
+        status="success",
+        user={
+            "email": identity["email"],
+            "account_id": identity["account_id"],
+        },
+    )
 
 
 @app.delete("/api/auth/account")
@@ -179,6 +205,119 @@ def auth_delete_account():
         return jsonify(status="error", error="Could not delete account"), 500
 
     return jsonify(status="success")
+
+
+@app.get("/api/user/push-settings")
+def push_settings_get():
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+    ok, error, settings = get_push_settings(
+        identity["email"],
+        identity["account_id"],
+    )
+    if not ok:
+        logger.error("Push settings read failed: %s", error)
+        return jsonify(status="error", error="Could not load push settings"), 500
+    return jsonify(
+        status="success",
+        settings=settings,
+        push=public_push_configuration(),
+    )
+
+
+@app.put("/api/user/push-settings")
+def push_settings_put():
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+    try:
+        settings_input = PushSettingsInput.model_validate(
+            request.get_json(silent=True) or {}
+        )
+    except ValidationError:
+        return jsonify(status="error", error="Invalid push settings"), 400
+    configuration = public_push_configuration()
+    if settings_input.enabled and not configuration["configured"]:
+        return jsonify(
+            status="error",
+            error="push_not_configured",
+            message="Push reminders are not configured on the server",
+        ), 503
+    settings = settings_input.model_dump()
+    saved, error = save_push_settings(
+        identity["email"],
+        identity["account_id"],
+        settings,
+    )
+    if not saved:
+        logger.error("Push settings write failed: %s", error)
+        return jsonify(status="error", error="Could not save push settings"), 500
+    return jsonify(status="success", settings=settings)
+
+
+@app.post("/api/user/push-subscriptions")
+def push_subscription_post():
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+    try:
+        subscription_input = PushSubscriptionInput.model_validate(
+            request.get_json(silent=True) or {}
+        )
+    except ValidationError:
+        return jsonify(status="error", error="Invalid push subscription"), 400
+    if not public_push_configuration()["configured"]:
+        return jsonify(
+            status="error",
+            error="push_not_configured",
+            message="Push reminders are not configured on the server",
+        ), 503
+    saved, error = save_push_subscription(
+        identity["email"],
+        identity["account_id"],
+        subscription_input.model_dump(),
+    )
+    if not saved:
+        logger.error("Push subscription write failed: %s", error)
+        return jsonify(status="error", error="Could not save push subscription"), 500
+    return jsonify(status="success"), 201
+
+
+@app.delete("/api/user/push-subscriptions")
+def push_subscription_delete():
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+    try:
+        subscription_input = PushSubscriptionDeleteInput.model_validate(
+            request.get_json(silent=True) or {}
+        )
+    except ValidationError:
+        return jsonify(status="error", error="Invalid push subscription"), 400
+    deleted, error = delete_push_subscription(
+        identity["email"],
+        identity["account_id"],
+        subscription_input.endpoint,
+    )
+    if not deleted:
+        logger.error("Push subscription delete failed: %s", error)
+        return jsonify(status="error", error="Could not delete push subscription"), 500
+    return jsonify(status="success")
+
+
+@app.post("/api/internal/push/reminders")
+def push_reminders_dispatch():
+    expected_secret = os.environ.get("PUSH_CRON_SECRET", "")
+    provided_secret = request.headers.get("X-Cron-Secret", "")
+    if not expected_secret:
+        return jsonify(status="error", error="Push scheduler is not configured"), 503
+    if not provided_secret or not hmac.compare_digest(
+        provided_secret,
+        expected_secret,
+    ):
+        return jsonify(status="error", error="Unauthorized"), 401
+    return jsonify(dispatch_due_reminders())
 
 
 def _credential_error(provider, error, message, status_code, compatibility=False):
@@ -753,6 +892,11 @@ def nutrition_entries_create():
         entry_input.eaten_at,
         entry_input.source_message,
         identity["account_id"],
+        (
+            str(entry_input.client_request_id)
+            if entry_input.client_request_id
+            else None
+        ),
     )
     if not created:
         logger.error("Nutrition entry create failed for %s: %s", email, error)
@@ -952,6 +1096,10 @@ def root():
             "set_openai_key": "PUT /api/user/openai-key",
             "get_openai_key_status": "GET /api/user/openai-key",
             "delete_openai_key": "DELETE /api/user/openai-key",
+            "get_push_settings": "GET /api/user/push-settings",
+            "set_push_settings": "PUT /api/user/push-settings",
+            "add_push_subscription": "POST /api/user/push-subscriptions",
+            "delete_push_subscription": "DELETE /api/user/push-subscriptions",
             "analyze_meal": "POST /api/nutrition/analyze",
             "recommend_meals": "POST /api/nutrition/recommend",
             "create_nutrition_entry": "POST /api/nutrition/entries",

@@ -1,6 +1,7 @@
 """Validation for user-confirmed nutrition entries."""
 
 from datetime import datetime, timezone
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -13,6 +14,7 @@ class NutritionEntryInput(BaseModel):
     items: list[FoodItem] = Field(min_length=1, max_length=30)
     eaten_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     source_message: str | None = Field(default=None, max_length=MAX_MEAL_MESSAGE_LENGTH)
+    client_request_id: UUID | None = None
 
     @field_validator("eaten_at")
     @classmethod

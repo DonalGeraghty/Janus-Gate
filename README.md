@@ -12,6 +12,7 @@ Janus Gate is the backend API for [Nyx AI](https://github.com/DonalGeraghty/NyxA
 - Analyze meal descriptions with structured responses from the selected model
 - Create, list, update, and delete user-owned nutrition entries
 - Generate structured meal recommendations from today's calorie and protein progress
+- Store opt-in Web Push settings/subscriptions and dispatch local-time reminders
 - Delete credentials and nutrition data when an account is removed
 - Expose health and database-status endpoints for deployment checks
 
@@ -42,6 +43,7 @@ Nyx AI or another API client
 - Firebase Admin and Google Cloud Firestore
 - Google Cloud KMS
 - OpenAI, Mistral AI, and Anthropic Python SDKs
+- pywebpush/py-vapid for standards-based Web Push
 
 ## Local development
 
@@ -80,6 +82,10 @@ OPENAI_MODEL=gpt-5.6-sol
 MISTRAL_MODEL=mistral-small-2603
 ANTHROPIC_MODEL=claude-sonnet-5
 AI_KMS_KEY_NAME=projects/PROJECT_ID/locations/REGION/keyRings/janus-gate/cryptoKeys/user-openai-keys
+VAPID_PRIVATE_KEY=base64url-private-key
+VAPID_PUBLIC_KEY=base64url-public-key
+VAPID_SUBJECT=mailto:admin@example.com
+PUSH_CRON_SECRET=replace-with-a-long-random-secret
 
 # Optional when Application Default Credentials are not available:
 # GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
@@ -124,6 +130,8 @@ Passwords must contain at least eight characters. JWTs use HS256 and expire afte
 | `PUT` | `/api/user/ai-credentials/{provider}` | Bearer JWT | Authenticate, encrypt, and store that provider's API key without generating output |
 | `GET` | `/api/user/ai-credentials/{provider}` | Bearer JWT | Return safe credential-status metadata |
 | `DELETE` | `/api/user/ai-credentials/{provider}` | Bearer JWT | Remove that provider's credential |
+| `GET/PUT` | `/api/user/push-settings` | Bearer JWT | Read or change daily reminder settings |
+| `POST/DELETE` | `/api/user/push-subscriptions` | Bearer JWT | Add or remove this device's Push subscription |
 | `PUT/GET/DELETE` | `/api/user/openai-key` | Bearer JWT | Compatibility alias for the OpenAI credential |
 | `POST` | `/api/nutrition/analyze` | Bearer JWT | Analyze a meal without saving it |
 | `POST` | `/api/nutrition/recommend` | Bearer JWT | Recommend meals for the rest of the day |
@@ -131,6 +139,7 @@ Passwords must contain at least eight characters. JWTs use HS256 and expire afte
 | `GET` | `/api/nutrition/entries` | Bearer JWT | List entries, optionally filtered by date |
 | `PUT` | `/api/nutrition/entries/{entry_id}` | Bearer JWT | Replace an owned entry and recalculate totals |
 | `DELETE` | `/api/nutrition/entries/{entry_id}` | Bearer JWT | Delete an owned entry |
+| `POST` | `/api/internal/push/reminders` | `X-Cron-Secret` | Dispatch due reminders from Cloud Scheduler |
 | `GET` | `/health` | No | Return service and database status |
 | `GET` | `/` | No | List the available endpoints |
 
@@ -187,6 +196,36 @@ login atomically assigns the legacy account an ID and issues a new token.
 
 The API recalculates total calories and protein from the submitted items. Meal analysis is an estimate and is not saved automatically.
 
+An optional UUID `client_request_id` makes nutrition creation idempotent. Janus
+Gate derives an account-scoped document ID from it and returns the existing
+entry when a client retries, preventing duplicate records after an ambiguous
+network failure.
+
+## Web Push reminders
+
+Generate deployment-safe VAPID values once:
+
+```bash
+python scripts/generate_vapid_keys.py
+```
+
+Store the printed values as `VAPID_PRIVATE_KEY`, `VAPID_PUBLIC_KEY`, and
+`PUSH_CRON_SECRET` secrets; do not commit their output. Set `VAPID_SUBJECT` to
+an administrator `mailto:` or HTTPS contact.
+
+The deployment workflow passes those four GitHub Actions secrets to Cloud Run
+and creates or updates a Cloud Scheduler job that invokes the internal endpoint
+every five minutes. Each enabled account stores an `HH:MM` reminder time and
+IANA timezone. Dispatch uses an atomic, expiring per-user claim so overlapping
+scheduler attempts do not send the same daily reminder twice. Failed batches
+release the claim for a later retry; HTTP 404/410 Push responses remove expired
+subscriptions.
+
+Push payloads are intentionally generic and contain no meal or nutrition data.
+Subscription endpoints and key material are never returned by the settings
+endpoint. Disabling reminders stops delivery before the browser subscription
+is removed. Account deletion removes all subscription documents.
+
 ## AI credential security
 
 - Each user supplies their own OpenAI, Mistral AI, and/or Anthropic API key.
@@ -202,6 +241,7 @@ The API recalculates total calories and protein from the submitted items. Meal a
 - Account deletion marks the user first; credential and nutrition writes transactionally require the matching live, non-deleting parent account so concurrent requests cannot recreate orphaned data.
 - Deletion cleanup is idempotent and generation-bound. Failed deletions remain marked for an authenticated retry, and stale markers resume cleanup automatically.
 - Account deletion removes all encrypted provider credentials and all nutrition entries.
+- Account deletion also removes Web Push subscriptions; reminder settings disappear with the user document.
 
 Protected data is scoped through the authenticated email. The API currently allows cross-origin requests to `/api/*` from any origin while restricting methods and headers. Replace the wildcard with an origin allowlist before moving to cookie-based authentication.
 

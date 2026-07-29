@@ -299,6 +299,37 @@ class NutritionApiTests(unittest.TestCase):
         response = self.client.get("/api/nutrition/entries?date=2026-07-21", headers=headers)
         self.assertEqual(response.get_json()["entries"], [])
 
+    def test_retried_client_request_id_does_not_duplicate_an_entry(self):
+        headers = self.register()
+        payload = {
+            "items": SAMPLE_ANALYSIS["items"],
+            "eaten_at": "2026-07-22T12:30:00Z",
+            "source_message": "Two eggs and toast",
+            "client_request_id": "18402295-888b-4c4d-a962-981eac00ac12",
+        }
+
+        first = self.client.post(
+            "/api/nutrition/entries",
+            headers=headers,
+            json=payload,
+        )
+        second = self.client.post(
+            "/api/nutrition/entries",
+            headers=headers,
+            json=payload,
+        )
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 201)
+        self.assertEqual(
+            first.get_json()["entry"]["id"],
+            second.get_json()["entry"]["id"],
+        )
+        self.assertEqual(
+            len(db_state.nutrition_entries_memory["user@example.com"]),
+            1,
+        )
+
     def test_entries_can_be_listed_by_timezone_aware_range(self):
         headers = self.register()
         for eaten_at in (
