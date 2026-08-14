@@ -9,8 +9,8 @@ on:
 
 env:
   PROJECT_ID: donal-geraghty-home
-  SERVICE_NAME: janus
-  RUNTIME_SERVICE_ACCOUNT: janus
+  SERVICE_NAME: janus-api
+  RUNTIME_SERVICE_ACCOUNT: janus-api
   # Retained so credentials encrypted before the rename remain decryptable.
   KMS_KEYRING: janus-gate
   REGION: europe-west1
@@ -76,7 +76,7 @@ jobs:
         run: |
           if ! gcloud iam service-accounts describe ${{ env.RUNTIME_SERVICE_ACCOUNT }}@${{ env.PROJECT_ID }}.iam.gserviceaccount.com &> /dev/null; then
             gcloud iam service-accounts create ${{ env.RUNTIME_SERVICE_ACCOUNT }} \
-              --display-name="Janus (portfolio auth API)"
+              --display-name="Janus API"
           fi
           
       - name: Grant Firestore permissions
