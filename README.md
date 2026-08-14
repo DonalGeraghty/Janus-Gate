@@ -1,6 +1,6 @@
-# Janus
+# Janus API
 
-Janus is the backend API for [Nyx](https://github.com/DonalGeraghty/nyx). It provides account authentication, per-user encrypted OpenAI, Mistral AI, and Anthropic credentials, selectable AI models, structured meal analysis, and user-scoped nutrition storage.
+Janus API is the backend for [Nyx](https://github.com/DonalGeraghty/nyx). It provides account authentication, per-user encrypted OpenAI, Mistral AI, and Anthropic credentials, selectable AI models, structured meal analysis, and user-scoped nutrition storage.
 
 ## Responsibilities
 
@@ -20,7 +20,7 @@ Janus is the backend API for [Nyx](https://github.com/DonalGeraghty/nyx). It pro
 
 ```text
 Nyx or another API client
-  └─ Janus (Flask)
+  └─ Janus API (Flask)
        ├─ Firestore
        │    ├─ users/{email}
        │    ├─ users/{email}/nutrition_entries/{entry}
@@ -197,7 +197,7 @@ login atomically assigns the legacy account an ID and issues a new token.
 The API recalculates total calories and protein from the submitted items. Meal analysis is an estimate and is not saved automatically.
 
 An optional UUID `client_request_id` makes nutrition creation idempotent. Janus
-derives an account-scoped document ID from it and returns the existing
+API derives an account-scoped document ID from it and returns the existing
 entry when a client retries, preventing duplicate records after an ambiguous
 network failure.
 
@@ -235,7 +235,7 @@ is removed. Account deletion removes all subscription documents.
 - Firestore stores each provider separately with only ciphertext, the last four characters, version metadata, and timestamps.
 - New KMS additional authenticated data includes the normalized user email and provider, binding ciphertext to both.
 - Legacy OpenAI ciphertext remains decryptable with its original user-bound authenticated data.
-- The plaintext key is decrypted only when Janus calls the selected provider.
+- The plaintext key is decrypted only when Janus API calls the selected provider.
 - Credential operations fail closed if Firestore or KMS is unavailable.
 - JWTs and guarded data operations carry an immutable account ID, so a token or in-flight request from a deleted account cannot cross into a newly registered account with the same email.
 - Account deletion marks the user first; credential and nutrition writes transactionally require the matching live, non-deleting parent account so concurrent requests cannot recreate orphaned data.
@@ -260,14 +260,14 @@ The tests cover authentication, provider/model selection, three-provider key iso
 Build and run the production image:
 
 ```bash
-docker build -t janus .
+docker build -t janus-api .
 docker run --rm -p 8080:8080 \
   -e JWT_SECRET_KEY=replace-with-a-long-random-secret \
   -e OPENAI_MODEL=gpt-5.6-sol \
   -e MISTRAL_MODEL=mistral-small-2603 \
   -e ANTHROPIC_MODEL=claude-sonnet-5 \
   -e AI_KMS_KEY_NAME=projects/PROJECT_ID/locations/REGION/keyRings/janus-gate/cryptoKeys/user-openai-keys \
-  janus
+  janus-api
 ```
 
 The container runs as a non-root user, listens on port `8080`, and checks `/health`.

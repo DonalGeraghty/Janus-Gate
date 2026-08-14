@@ -360,7 +360,7 @@ class CredentialPersistenceRaceTests(unittest.TestCase):
 class KmsCredentialServiceTests(unittest.TestCase):
     @patch.dict(
         os.environ,
-        {"OPENAI_KMS_KEY_NAME": "projects/test/locations/europe-west1/keyRings/janus/cryptoKeys/users"},
+        {"OPENAI_KMS_KEY_NAME": "projects/test/locations/europe-west1/keyRings/janus-api/cryptoKeys/users"},
     )
     @patch("services.credential_service.kms.KeyManagementServiceClient")
     def test_encrypt_and_decrypt_use_user_bound_aad(self, client_class):
@@ -382,7 +382,7 @@ class KmsCredentialServiceTests(unittest.TestCase):
 
     @patch.dict(
         os.environ,
-        {"AI_KMS_KEY_NAME": "projects/test/locations/europe-west1/keyRings/janus/cryptoKeys/users"},
+        {"AI_KMS_KEY_NAME": "projects/test/locations/europe-west1/keyRings/janus-api/cryptoKeys/users"},
     )
     @patch("services.credential_service.kms.KeyManagementServiceClient")
     def test_v2_aad_is_bound_to_user_and_provider(self, client_class):
@@ -413,7 +413,7 @@ class KmsCredentialServiceTests(unittest.TestCase):
 
     @patch.dict(
         os.environ,
-        {"AI_KMS_KEY_NAME": "projects/test/locations/europe-west1/keyRings/janus/cryptoKeys/users"},
+        {"AI_KMS_KEY_NAME": "projects/test/locations/europe-west1/keyRings/janus-api/cryptoKeys/users"},
     )
     @patch("services.credential_service.kms.KeyManagementServiceClient")
     def test_v2_aad_supports_anthropic_provider(self, client_class):

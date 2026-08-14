@@ -1,4 +1,4 @@
-"""Janus: a small user authentication API."""
+"""Janus API: a small user authentication API."""
 
 import os
 import hmac
@@ -1082,7 +1082,7 @@ def health_check():
 @app.get("/")
 def root():
     return jsonify(
-        service="Janus",
+        service="Janus API",
         endpoints={
             "register": "POST /api/auth/register",
             "login": "POST /api/auth/login",

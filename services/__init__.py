@@ -1,5 +1,5 @@
 """
-Services package for Janus (portfolio auth API).
+Services package for Janus API.
 Contains Firebase service and logging service
 """
 
