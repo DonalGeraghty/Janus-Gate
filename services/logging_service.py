@@ -1,4 +1,4 @@
-"""Console logging helpers for Janus Gate."""
+"""Console logging helpers for Janus."""
 
 import logging
 import os

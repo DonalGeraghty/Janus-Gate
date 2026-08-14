@@ -24,6 +24,8 @@ def _kms_key_name():
 
 
 def _additional_authenticated_data(email, provider="openai", aad_version=1):
+    # The pre-rename namespace is cryptographic input, not a display name.
+    # Changing it would make existing ciphertext impossible to decrypt.
     email_key = email.strip().lower()
     if aad_version in (None, 1):
         if provider != "openai":
