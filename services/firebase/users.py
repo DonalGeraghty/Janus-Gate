@@ -21,6 +21,7 @@ from .core import normalize_user_email
 from .nutrition import delete_nutrition_entries
 from .openai_credentials import delete_all_ai_credentials
 from .push import delete_push_data
+from .workouts import delete_workout_entries
 from ..logging_service import logger
 
 
@@ -404,6 +405,7 @@ def _clear_user_memory(email_key):
     with db_state.memory_lock:
         db_state.auth_users_memory.pop(email_key, None)
         db_state.nutrition_entries_memory.pop(email_key, None)
+        db_state.workout_history_memory.pop(email_key, None)
         db_state.push_subscriptions_memory.pop(email_key, None)
 
 
@@ -489,6 +491,13 @@ def delete_user_account(email, expected_account_id):
         return False, "delete_failed"
 
     if not delete_nutrition_entries(
+        email_key,
+        expected_account_id,
+        deletion_token,
+    ):
+        return False, "delete_failed"
+
+    if not delete_workout_entries(
         email_key,
         expected_account_id,
         deletion_token,

@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from core.auth_service import decode_access_token, login_user, register_user, verify_password
 from core.nutrition_service import MealRecommendationInput, NutritionEntryInput
+from core.workout_service import WorkoutHistoryInput
 from core.push_service import (
     PushSettingsInput,
     PushSubscriptionDeleteInput,
@@ -35,6 +36,9 @@ from services.firebase_service import (
     save_ai_credential,
     save_ai_selection,
     update_nutrition_entry,
+    delete_workout_entry,
+    list_workout_entries,
+    save_workout_entry,
 )
 from services.credential_service import (
     CredentialConfigurationError,
@@ -1074,6 +1078,82 @@ def nutrition_entry_update(entry_id):
     return jsonify(status="success", entry=entry)
 
 
+@app.get("/api/workouts")
+def workout_entries_list():
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+
+    ok, error, entries = list_workout_entries(
+        identity["email"],
+        identity["account_id"],
+    )
+    if not ok:
+        logger.error(
+            "Workout history list failed for %s: %s",
+            identity["email"],
+            error,
+        )
+        return jsonify(status="error", error="Could not load workout history"), 500
+    return jsonify(status="success", entries=entries)
+
+
+@app.put("/api/workouts/<entry_id>")
+def workout_entry_save(entry_id):
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+
+    try:
+        entry_input = WorkoutHistoryInput.model_validate(
+            request.get_json(silent=True) or {}
+        )
+    except ValidationError:
+        return jsonify(status="error", error="Invalid workout entry"), 400
+
+    saved, error, entry = save_workout_entry(
+        identity["email"],
+        entry_id,
+        entry_input.model_dump(),
+        identity["account_id"],
+    )
+    if error == "invalid_entry_id":
+        return jsonify(status="error", error="Invalid workout entry ID"), 400
+    if not saved:
+        logger.error(
+            "Workout history save failed for %s: %s",
+            identity["email"],
+            error,
+        )
+        return jsonify(status="error", error="Could not save workout entry"), 500
+    return jsonify(status="success", entry=entry)
+
+
+@app.delete("/api/workouts/<entry_id>")
+def workout_entry_delete(entry_id):
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+
+    deleted, error = delete_workout_entry(
+        identity["email"],
+        entry_id,
+        identity["account_id"],
+    )
+    if error == "invalid_entry_id":
+        return jsonify(status="error", error="Invalid workout entry ID"), 400
+    if error == "not_found":
+        return jsonify(status="error", error="Workout entry not found"), 404
+    if not deleted:
+        logger.error(
+            "Workout history delete failed for %s: %s",
+            identity["email"],
+            error,
+        )
+        return jsonify(status="error", error="Could not delete workout entry"), 500
+    return jsonify(status="success")
+
+
 @app.get("/health")
 def health_check():
     return jsonify(status="healthy", database=get_database_status())
@@ -1106,6 +1186,9 @@ def root():
             "list_nutrition_entries": "GET /api/nutrition/entries",
             "delete_nutrition_entry": "DELETE /api/nutrition/entries/{entry_id}",
             "update_nutrition_entry": "PUT /api/nutrition/entries/{entry_id}",
+            "list_workout_history": "GET /api/workouts",
+            "save_workout_entry": "PUT /api/workouts/{entry_id}",
+            "delete_workout_entry": "DELETE /api/workouts/{entry_id}",
             "health": "GET /health",
         },
     )

@@ -14,6 +14,12 @@ from .nutrition import (
     list_nutrition_entries,
     update_nutrition_entry,
 )
+from .workouts import (
+    delete_workout_entries,
+    delete_workout_entry,
+    list_workout_entries,
+    save_workout_entry,
+)
 from .push import (
     claim_push_reminder,
     delete_push_data,
