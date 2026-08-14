@@ -13,7 +13,7 @@ Janus API is the backend for [Nyx](https://github.com/DonalGeraghty/nyx). It pro
 - Create, list, update, and delete user-owned nutrition entries
 - Generate structured meal recommendations from today's calorie and protein progress
 - Store opt-in Web Push settings/subscriptions and dispatch local-time reminders
-- Delete credentials and nutrition data when an account is removed
+- Delete credentials, nutrition data, and workout history when an account is removed
 - Expose health and database-status endpoints for deployment checks
 
 ## Architecture
@@ -24,6 +24,7 @@ Nyx or another API client
        ├─ Firestore
        │    ├─ users/{email}
        │    ├─ users/{email}/nutrition_entries/{entry}
+       │    ├─ users/{email}/workout_history/{entry}
        │    ├─ users/{email}/private/openai
        │    ├─ users/{email}/private/mistral
        │    └─ users/{email}/private/anthropic
@@ -105,7 +106,7 @@ python app.py
 
 The server listens on `http://localhost:5000` unless `PORT` is set.
 
-When Firestore is unavailable, local authentication, profile settings, and nutrition operations fall back to process memory. That data disappears when the server restarts. AI credential storage deliberately has no plaintext or in-memory fallback: Firestore or KMS failures cause those operations to fail closed.
+When Firestore is unavailable, local authentication, profile settings, nutrition operations, and workout history fall back to process memory. That data disappears when the server restarts. AI credential storage deliberately has no plaintext or in-memory fallback: Firestore or KMS failures cause those operations to fail closed.
 
 ## Authentication
 
@@ -139,6 +140,9 @@ Passwords must contain at least eight characters. JWTs use HS256 and expire afte
 | `GET` | `/api/nutrition/entries` | Bearer JWT | List entries, optionally filtered by date |
 | `PUT` | `/api/nutrition/entries/{entry_id}` | Bearer JWT | Replace an owned entry and recalculate totals |
 | `DELETE` | `/api/nutrition/entries/{entry_id}` | Bearer JWT | Delete an owned entry |
+| `GET` | `/api/workouts` | Bearer JWT | List the authenticated account's workout history |
+| `PUT` | `/api/workouts/{entry_id}` | Bearer JWT | Create or replace an owned workout history entry |
+| `DELETE` | `/api/workouts/{entry_id}` | Bearer JWT | Delete an owned workout history entry |
 | `POST` | `/api/internal/push/reminders` | `X-Cron-Secret` | Dispatch due reminders from Cloud Scheduler |
 | `GET` | `/health` | No | Return service and database status |
 | `GET` | `/` | No | List the available endpoints |
@@ -285,7 +289,7 @@ Configure these GitHub Actions secrets:
 
 The Cloud Run runtime service account needs:
 
-- Firestore access for users, credentials, and nutrition entries
+- Firestore access for users, credentials, nutrition entries, and workout history
 - `roles/cloudkms.cryptoKeyEncrypterDecrypter` on the configured KMS key
 
 The workflow grants that KMS role directly on the existing, legacy-named key
