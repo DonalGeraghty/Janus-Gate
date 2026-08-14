@@ -9,8 +9,10 @@ on:
 
 env:
   PROJECT_ID: donal-geraghty-home
-  # Codename Janus — Roman god of gateways; service id: janus-gate
-  SERVICE_NAME: janus-gate
+  SERVICE_NAME: janus
+  RUNTIME_SERVICE_ACCOUNT: janus
+  # Retained so credentials encrypted before the rename remain decryptable.
+  KMS_KEYRING: janus-gate
   REGION: europe-west1
 
 jobs:
@@ -72,26 +74,26 @@ jobs:
           
       - name: Create service account if not exists
         run: |
-          if ! gcloud iam service-accounts describe janus-gate@${{ env.PROJECT_ID }}.iam.gserviceaccount.com &> /dev/null; then
-            gcloud iam service-accounts create janus-gate \
+          if ! gcloud iam service-accounts describe ${{ env.RUNTIME_SERVICE_ACCOUNT }}@${{ env.PROJECT_ID }}.iam.gserviceaccount.com &> /dev/null; then
+            gcloud iam service-accounts create ${{ env.RUNTIME_SERVICE_ACCOUNT }} \
               --display-name="Janus (portfolio auth API)"
           fi
           
       - name: Grant Firestore permissions
         run: |
           gcloud projects add-iam-policy-binding ${{ env.PROJECT_ID }} \
-            --member="serviceAccount:janus-gate@${{ env.PROJECT_ID }}.iam.gserviceaccount.com" \
+            --member="serviceAccount:${{ env.RUNTIME_SERVICE_ACCOUNT }}@${{ env.PROJECT_ID }}.iam.gserviceaccount.com" \
             --role="roles/datastore.user"
           gcloud projects add-iam-policy-binding ${{ env.PROJECT_ID }} \
-            --member="serviceAccount:janus-gate@${{ env.PROJECT_ID }}.iam.gserviceaccount.com" \
+            --member="serviceAccount:${{ env.RUNTIME_SERVICE_ACCOUNT }}@${{ env.PROJECT_ID }}.iam.gserviceaccount.com" \
             --role="roles/datastore.viewer"
 
       - name: Grant KMS key permissions
         run: |
           gcloud kms keys add-iam-policy-binding user-openai-keys \
-            --keyring=janus-gate \
+            --keyring="${KMS_KEYRING}" \
             --location="${REGION}" \
-            --member="serviceAccount:janus-gate@${PROJECT_ID}.iam.gserviceaccount.com" \
+            --member="serviceAccount:${RUNTIME_SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com" \
             --role="roles/cloudkms.cryptoKeyEncrypterDecrypter"
             
       - name: Deploy to Cloud Run
@@ -99,14 +101,14 @@ jobs:
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --source . \
             --region ${{ env.REGION }} \
-            --service-account janus-gate@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
+            --service-account ${{ env.RUNTIME_SERVICE_ACCOUNT }}@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
             --allow-unauthenticated \
             --port 8080 \
             --memory 512Mi \
             --cpu 1 \
             --max-instances 10 \
             --timeout 300 \
-            --set-env-vars "FLASK_ENV=production,JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }},OPENAI_MODEL=gpt-5.6-sol,MISTRAL_MODEL=mistral-small-2603,ANTHROPIC_MODEL=claude-sonnet-5,AI_KMS_KEY_NAME=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/keyRings/janus-gate/cryptoKeys/user-openai-keys,VAPID_PRIVATE_KEY=${{ secrets.VAPID_PRIVATE_KEY }},VAPID_PUBLIC_KEY=${{ secrets.VAPID_PUBLIC_KEY }},VAPID_SUBJECT=${{ secrets.VAPID_SUBJECT }},PUSH_CRON_SECRET=${{ secrets.PUSH_CRON_SECRET }}"
+            --set-env-vars "FLASK_ENV=production,JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }},OPENAI_MODEL=gpt-5.6-sol,MISTRAL_MODEL=mistral-small-2603,ANTHROPIC_MODEL=claude-sonnet-5,AI_KMS_KEY_NAME=projects/${{ env.PROJECT_ID }}/locations/${{ env.REGION }}/keyRings/${{ env.KMS_KEYRING }}/cryptoKeys/user-openai-keys,VAPID_PRIVATE_KEY=${{ secrets.VAPID_PRIVATE_KEY }},VAPID_PUBLIC_KEY=${{ secrets.VAPID_PUBLIC_KEY }},VAPID_SUBJECT=${{ secrets.VAPID_SUBJECT }},PUSH_CRON_SECRET=${{ secrets.PUSH_CRON_SECRET }}"
             
       - name: Get service URL
         id: service-url

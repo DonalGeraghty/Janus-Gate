@@ -1,4 +1,4 @@
-# Janus Gate — Flask auth API (Firestore, JWT). Python 3.11+ recommended.
+# Janus — Flask auth API (Firestore, JWT). Python 3.11+ recommended.
 Flask==3.1.0
 Flask-CORS==5.0.1
 python-dotenv==1.0.1
