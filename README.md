@@ -1,6 +1,6 @@
 # Janus
 
-Janus is the backend API for [Nyx AI](https://github.com/DonalGeraghty/NyxAI). It provides account authentication, per-user encrypted OpenAI, Mistral AI, and Anthropic credentials, selectable AI models, structured meal analysis, and user-scoped nutrition storage.
+Janus is the backend API for [Nyx](https://github.com/DonalGeraghty/nyx). It provides account authentication, per-user encrypted OpenAI, Mistral AI, and Anthropic credentials, selectable AI models, structured meal analysis, and user-scoped nutrition storage.
 
 ## Responsibilities
 
@@ -19,7 +19,7 @@ Janus is the backend API for [Nyx AI](https://github.com/DonalGeraghty/NyxAI). I
 ## Architecture
 
 ```text
-Nyx AI or another API client
+Nyx or another API client
   └─ Janus (Flask)
        ├─ Firestore
        │    ├─ users/{email}
@@ -322,4 +322,4 @@ The deployment sets `OPENAI_MODEL`, `MISTRAL_MODEL`, `ANTHROPIC_MODEL`, and `AI_
 
 ## Related project
 
-- [Nyx AI](https://github.com/DonalGeraghty/NyxAI) — React frontend for the Janus API
+- [Nyx](https://github.com/DonalGeraghty/nyx) — React frontend for the Janus API

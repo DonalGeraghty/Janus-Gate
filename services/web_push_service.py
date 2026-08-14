@@ -29,7 +29,7 @@ def _send(subscription):
     private_key = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
     subject = os.environ.get("VAPID_SUBJECT", "").strip()
     payload = json.dumps({
-        "title": "Nyx AI reminder",
+        "title": "Nyx reminder",
         "body": "Take a moment to update your nutrition log.",
         "tag": "nyx-daily-reminder",
         "url": "/",
