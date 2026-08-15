@@ -63,6 +63,7 @@ from services.ai_errors import (
 )
 from services.ai_service import (
     analyze_meal,
+    analyze_workout,
     recommend_meals,
     validate_provider_api_key as validate_api_key,
 )
@@ -71,7 +72,7 @@ from services.web_push_service import (
     dispatch_due_reminders,
     public_push_configuration,
 )
-from services.ai_contract import MAX_MEAL_MESSAGE_LENGTH
+from services.ai_contract import MAX_MEAL_MESSAGE_LENGTH, MAX_WORKOUT_MESSAGE_LENGTH
 
 
 logger = get_flask_app_logger()
@@ -877,6 +878,118 @@ def nutrition_recommend():
     return jsonify(status="success", recommendation=recommendation)
 
 
+@app.post("/api/workouts/analyze")
+def workout_analyze():
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+    email = identity["email"]
+
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify(status="error", error="Message is required"), 400
+    message = data.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return jsonify(status="error", error="Message is required"), 400
+    if len(message.strip()) > MAX_WORKOUT_MESSAGE_LENGTH:
+        return jsonify(
+            status="error",
+            error="Message must be 2000 characters or fewer",
+        ), 400
+
+    selection, credential, error = _selected_ai_credential(
+        email,
+        identity["account_id"],
+    )
+    if error:
+        logger.error("Credential read failed for %s: %s", email, error)
+        return jsonify(
+            status="error",
+            error=error,
+            message=(
+                "AI settings are unavailable"
+                if error == "settings_service_unavailable"
+                else "Secure credential storage is unavailable"
+            ),
+        ), 503
+    if not credential:
+        provider = selection["provider"]
+        return jsonify(
+            status="error",
+            error="provider_key_required",
+            provider=provider,
+            message=(
+                f"Add your {provider_name(provider)} API key before analyzing workouts"
+            ),
+        ), 409
+
+    provider = selection["provider"]
+    model = selection["model"]
+    try:
+        api_key = decrypt_api_key(
+            credential.get("ciphertext", ""),
+            email,
+            provider=provider,
+            aad_version=_stored_credential_aad_version(provider, credential),
+        )
+        analysis = analyze_workout(message, email, api_key, provider, model)
+    except ValueError as error:
+        validation_message = (
+            "Message must be 2000 characters or fewer"
+            if str(error) == "message_too_long"
+            else "Message is required"
+        )
+        return jsonify(status="error", error=validation_message), 400
+    except (CredentialConfigurationError, CredentialEncryptionError) as error:
+        logger.error("Credential decryption unavailable: %s", type(error).__name__)
+        return jsonify(
+            status="error",
+            error="credential_service_unavailable",
+            message="Secure credential storage is unavailable",
+        ), 503
+    except AIAuthenticationError:
+        return jsonify(
+            status="error",
+            error="provider_key_invalid",
+            provider=provider,
+            message=f"Your {provider_name(provider)} API key is no longer valid",
+        ), 422
+    except AIAuthorizationError:
+        return jsonify(
+            status="error",
+            error="provider_access_denied",
+            provider=provider,
+            message=(
+                f"Your {provider_name(provider)} API key does not have the "
+                "required API access"
+            ),
+        ), 403
+    except AIBillingError:
+        return jsonify(
+            status="error",
+            error="provider_billing_required",
+            provider=provider,
+            message=_provider_billing_message(provider),
+        ), 402
+    except AIRateLimitError:
+        return jsonify(
+            status="error",
+            error="provider_rate_limited",
+            provider=provider,
+            message="Workout analysis is temporarily busy",
+        ), 429
+    except AIServiceError as error:
+        logger.error("Workout analysis failed: %s", error)
+        return jsonify(
+            status="error",
+            error="provider_unavailable",
+            provider=provider,
+            message="Workout analysis failed",
+        ), 502
+
+    return jsonify(status="success", analysis=analysis)
+
+
 @app.post("/api/nutrition/entries")
 def nutrition_entries_create():
     identity = _authenticated_identity()
@@ -1182,6 +1295,7 @@ def root():
             "delete_push_subscription": "DELETE /api/user/push-subscriptions",
             "analyze_meal": "POST /api/nutrition/analyze",
             "recommend_meals": "POST /api/nutrition/recommend",
+            "analyze_workout": "POST /api/workouts/analyze",
             "create_nutrition_entry": "POST /api/nutrition/entries",
             "list_nutrition_entries": "GET /api/nutrition/entries",
             "delete_nutrition_entry": "DELETE /api/nutrition/entries/{entry_id}",

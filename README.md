@@ -140,6 +140,7 @@ Passwords must contain at least eight characters. JWTs use HS256 and expire afte
 | `GET` | `/api/nutrition/entries` | Bearer JWT | List entries, optionally filtered by date |
 | `PUT` | `/api/nutrition/entries/{entry_id}` | Bearer JWT | Replace an owned entry and recalculate totals |
 | `DELETE` | `/api/nutrition/entries/{entry_id}` | Bearer JWT | Delete an owned entry |
+| `POST` | `/api/workouts/analyze` | Bearer JWT | Structure a natural-language workout without saving it |
 | `GET` | `/api/workouts` | Bearer JWT | List the authenticated account's workout history |
 | `PUT` | `/api/workouts/{entry_id}` | Bearer JWT | Create or replace an owned workout history entry |
 | `DELETE` | `/api/workouts/{entry_id}` | Bearer JWT | Delete an owned workout history entry |
@@ -167,7 +168,7 @@ AI settings accept only these provider/model combinations:
 - Mistral AI: `mistral-small-2603`, `mistral-large-2512`, or `mistral-medium-3-5`
 - Claude (Anthropic): `claude-opus-5`, `claude-sonnet-5`, or `claude-haiku-4-5-20251001`
 
-Existing users without saved AI settings default to OpenAI and `gpt-5.6-sol`. Selecting a provider does not delete any other provider's key. Analysis and recommendation requests never fall back silently: when the selected provider has no stored key, the API returns `409 provider_key_required`.
+Existing users without saved AI settings default to OpenAI and `gpt-5.6-sol`. Selecting a provider does not delete any other provider's key. Meal analysis, workout analysis, and recommendation requests never fall back silently: when the selected provider has no stored key, the API returns `409 provider_key_required`.
 
 Credential setup authenticates keys with provider model-metadata endpoints and
 does not spend inference tokens. A key can be stored when the provider reports

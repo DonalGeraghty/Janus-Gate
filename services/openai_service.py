@@ -18,12 +18,15 @@ from pydantic import ValidationError
 
 from .ai_contract import (
     MAX_MEAL_MESSAGE_LENGTH,
+    MAX_WORKOUT_MESSAGE_LENGTH,
     MEAL_ANALYSIS_PROMPT,
     MEAL_RECOMMENDATION_PROMPT,
+    WORKOUT_ANALYSIS_PROMPT,
     FoodItem,
     MealAnalysis,
     MealRecommendation,
     RecommendedMeal,
+    WorkoutAnalysis,
 )
 from .ai_errors import (
     AIAuthenticationError,
@@ -181,6 +184,44 @@ def analyze_meal(message, email, api_key, model=None):
         sum(item["protein_g"] for item in result["items"]), 1
     )
     return result
+
+
+def analyze_workout(message, email, api_key, model=None):
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("message_required")
+    message = message.strip()
+    if len(message) > MAX_WORKOUT_MESSAGE_LENGTH:
+        raise ValueError("message_too_long")
+
+    try:
+        response = OpenAI(api_key=api_key).responses.parse(
+            model=_model_name(model),
+            input=[
+                {"role": "system", "content": WORKOUT_ANALYSIS_PROMPT},
+                {"role": "user", "content": message},
+            ],
+            text_format=WorkoutAnalysis,
+            reasoning={"effort": "low"},
+            safety_identifier=_safety_identifier(email),
+            store=False,
+        )
+    except (
+        AuthenticationError,
+        PermissionDeniedError,
+        RateLimitError,
+        APIConnectionError,
+        APITimeoutError,
+        APIStatusError,
+        ValidationError,
+        json.JSONDecodeError,
+        TypeError,
+    ) as error:
+        _raise_mapped_openai_error(error)
+
+    analysis = response.output_parsed
+    if analysis is None:
+        raise OpenAIServiceError("OpenAI returned no structured workout analysis")
+    return analysis.model_dump()
 
 
 def recommend_meals(context, email, api_key, model=None):

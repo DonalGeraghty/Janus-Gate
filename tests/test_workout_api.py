@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from app import app
 from services.firebase import db_state
@@ -32,6 +32,39 @@ SAMPLE_WORKOUT = {
     "note": "Good session.",
 }
 
+SAMPLE_WORKOUT_ANALYSIS = {
+    "title": "Squats and rowing",
+    "summary": "A strength session followed by a steady row.",
+    "duration_minutes": 45,
+    "exercises": [
+        {
+            "name": "Goblet squat",
+            "sets": 3,
+            "reps": "10 reps",
+            "weight": "20 kg",
+            "duration": None,
+            "distance": None,
+            "notes": None,
+        },
+        {
+            "name": "Rowing",
+            "sets": None,
+            "reps": None,
+            "weight": None,
+            "duration": "24 minutes",
+            "distance": "5 km",
+            "notes": None,
+        },
+    ],
+    "intensity": "moderate",
+    "confidence": "high",
+    "assumptions": [],
+    "needs_clarification": False,
+    "clarification_question": "",
+}
+
+OPENAI_SELECTION = {"provider": "openai", "model": "gpt-5.6-sol"}
+
 
 class WorkoutApiTests(unittest.TestCase):
     def setUp(self):
@@ -56,6 +89,13 @@ class WorkoutApiTests(unittest.TestCase):
     def test_workout_history_requires_authentication(self):
         self.assertEqual(self.client.get("/api/workouts").status_code, 401)
         self.assertEqual(
+            self.client.post(
+                "/api/workouts/analyze",
+                json={"message": "Three sets of squats"},
+            ).status_code,
+            401,
+        )
+        self.assertEqual(
             self.client.put(
                 "/api/workouts/strength-a-1",
                 json=SAMPLE_WORKOUT,
@@ -68,6 +108,72 @@ class WorkoutApiTests(unittest.TestCase):
             ).status_code,
             401,
         )
+
+    def test_analyze_workout_returns_structure_without_writing(self):
+        headers = self.register()
+        with (
+            patch(
+                "app._selected_ai_credential",
+                return_value=(
+                    OPENAI_SELECTION,
+                    {"ciphertext": "encrypted", "aad_version": 2},
+                    None,
+                ),
+            ),
+            patch("app.decrypt_api_key", return_value="user-api-key-1234567890"),
+            patch(
+                "app.analyze_workout",
+                return_value=SAMPLE_WORKOUT_ANALYSIS,
+            ) as analyze_mock,
+        ):
+            response = self.client.post(
+                "/api/workouts/analyze",
+                headers=headers,
+                json={
+                    "message": (
+                        "I did 3 sets of 10 goblet squats at 20 kg then rowed "
+                        "5 km in 24 minutes"
+                    )
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["analysis"]["duration_minutes"], 45)
+        self.assertEqual(len(response.get_json()["analysis"]["exercises"]), 2)
+        self.assertEqual(db_state.workout_history_memory, {})
+        analyze_mock.assert_called_once_with(
+            (
+                "I did 3 sets of 10 goblet squats at 20 kg then rowed "
+                "5 km in 24 minutes"
+            ),
+            "user@example.com",
+            "user-api-key-1234567890",
+            "openai",
+            "gpt-5.6-sol",
+        )
+
+    def test_analyze_workout_requires_message_and_provider_key(self):
+        headers = self.register()
+        self.assertEqual(
+            self.client.post(
+                "/api/workouts/analyze",
+                headers=headers,
+                json={"message": "   "},
+            ).status_code,
+            400,
+        )
+        with patch(
+            "app._selected_ai_credential",
+            return_value=(OPENAI_SELECTION, None, None),
+        ):
+            response = self.client.post(
+                "/api/workouts/analyze",
+                headers=headers,
+                json={"message": "Three sets of squats"},
+            )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.get_json()["error"], "provider_key_required")
+        self.assertEqual(response.get_json()["provider"], "openai")
 
     def test_workout_history_create_list_update_and_delete(self):
         headers = self.register()
@@ -122,6 +228,36 @@ class WorkoutApiTests(unittest.TestCase):
                 "/api/workouts/strength-a-1", headers=headers
             ).status_code,
             404,
+        )
+
+    def test_ai_workout_details_are_persisted(self):
+        headers = self.register()
+        payload = {
+            **SAMPLE_WORKOUT,
+            "workout_id": "ai-workout",
+            "title": "Squats and rowing",
+            "entries": {
+                "ai-exercise-1": {
+                    "done": True,
+                    "name": "Goblet squat",
+                    "weight": "20 kg",
+                    "result": "3 sets · 10 reps",
+                }
+            },
+            "source_message": "I did squats and rowing.",
+        }
+        response = self.client.put(
+            "/api/workouts/ai-workout-1",
+            headers=headers,
+            json=payload,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        entry = response.get_json()["entry"]
+        self.assertEqual(entry["source_message"], payload["source_message"])
+        self.assertEqual(
+            entry["entries"]["ai-exercise-1"]["name"],
+            "Goblet squat",
         )
 
     def test_workout_history_is_isolated_by_account(self):
