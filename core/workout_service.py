@@ -13,6 +13,7 @@ class WorkoutExerciseResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     done: bool | None = None
+    name: str | None = Field(default=None, max_length=200)
     result: str | None = Field(default=None, max_length=200)
     weight: str | None = Field(default=None, max_length=32)
 
@@ -29,6 +30,7 @@ class WorkoutHistoryInput(BaseModel):
     total: int = Field(ge=1, le=1_000)
     entries: dict[str, WorkoutExerciseResult] = Field(default_factory=dict)
     note: str = Field(default="", max_length=4_000)
+    source_message: str | None = Field(default=None, max_length=2_000)
 
     @field_validator("workout_id")
     @classmethod

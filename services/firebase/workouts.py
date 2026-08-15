@@ -40,6 +40,7 @@ def _serialize_entry(entry_id, data):
         "total": data.get("total"),
         "entries": data.get("entries", {}),
         "note": data.get("note", ""),
+        "source_message": data.get("source_message"),
         "created_at": _isoformat(data.get("created_at")),
         "updated_at": _isoformat(data.get("updated_at")),
     }
