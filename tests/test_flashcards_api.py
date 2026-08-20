@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from app import app
 from core.flashcard_service import schedule_review
-from services.ai_contract import MinervaResponse
+from services.ai_contract import MinervaResponse, minerva_user_message
 from services.firebase import db_state
 
 
@@ -84,7 +84,41 @@ class FlashcardsApiTests(unittest.TestCase):
             "user-api-key-1234567890",
             "openai",
             "gpt-5.6-sol",
+            existing_cards=None,
         )
+
+    def test_minerva_receives_full_card_library_when_context_is_enabled(self):
+        headers = self.register()
+        existing_card = self.create_card(headers).get_json()["card"]
+        settings_response = self.client.put(
+            "/api/user/minerva-settings",
+            headers=headers,
+            json={"include_card_context": True},
+        )
+        self.assertEqual(settings_response.status_code, 200)
+
+        with (
+            patch(
+                "app._selected_ai_credential",
+                return_value=(
+                    OPENAI_SELECTION,
+                    {"ciphertext": "encrypted", "aad_version": 2},
+                    None,
+                ),
+            ),
+            patch("app.decrypt_api_key", return_value="user-api-key-1234567890"),
+            patch("app.respond_minerva", return_value=SAMPLE_DRAFT) as respond_mock,
+        ):
+            response = self.client.post(
+                "/api/minerva/respond",
+                headers=headers,
+                json={"message": "Add another computing card"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        context_cards = respond_mock.call_args.kwargs["existing_cards"]
+        self.assertEqual(len(context_cards), 1)
+        self.assertEqual(context_cards[0]["id"], existing_card["id"])
 
     def test_minerva_contract_accepts_multiple_card_drafts(self):
         second_draft = {
@@ -101,6 +135,20 @@ class FlashcardsApiTests(unittest.TestCase):
 
         self.assertEqual(len(response.cards), 2)
         self.assertEqual(response.cards[1].back, "Adverb.")
+
+    def test_minerva_card_context_contains_only_learning_content(self):
+        formatted = minerva_user_message("Create a related card", [{
+            "id": "private-storage-id",
+            "front": "What is a closure?",
+            "back": "Function + lexical environment.",
+            "tags": ["javascript"],
+            "review_count": 12,
+        }])
+
+        self.assertIn("What is a closure?", formatted)
+        self.assertIn("Function + lexical environment.", formatted)
+        self.assertNotIn("private-storage-id", formatted)
+        self.assertNotIn("review_count", formatted)
 
     def test_minerva_requires_selected_provider_key(self):
         headers = self.register()

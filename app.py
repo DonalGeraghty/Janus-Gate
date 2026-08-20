@@ -33,6 +33,7 @@ from services.firebase_service import (
     get_ai_credential,
     get_ai_credential_status,
     get_ai_selection,
+    get_minerva_settings,
     get_user_record,
     get_user_record_for_account_deletion,
     list_flashcards,
@@ -43,6 +44,7 @@ from services.firebase_service import (
     save_push_subscription,
     save_ai_credential,
     save_ai_selection,
+    save_minerva_settings,
     review_flashcard,
     update_nutrition_entry,
     update_flashcard,
@@ -654,6 +656,48 @@ def ai_settings_put():
     return jsonify(status="success", selection=selection)
 
 
+@app.get("/api/user/minerva-settings")
+def minerva_settings_get():
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="unauthorized"), 401
+    ok, error, settings = get_minerva_settings(
+        identity["email"],
+        identity["account_id"],
+    )
+    if not ok:
+        logger.error("Minerva settings read failed: %s", error)
+        return jsonify(
+            status="error",
+            error="settings_service_unavailable",
+            message="Minerva settings are unavailable",
+        ), 503
+    return jsonify(status="success", settings=settings)
+
+
+@app.put("/api/user/minerva-settings")
+def minerva_settings_put():
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="unauthorized"), 401
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or type(data.get("include_card_context")) is not bool:
+        return jsonify(status="error", error="invalid_settings"), 400
+    saved, error, settings = save_minerva_settings(
+        identity["email"],
+        identity["account_id"],
+        data["include_card_context"],
+    )
+    if not saved:
+        logger.error("Minerva settings save failed: %s", error)
+        return jsonify(
+            status="error",
+            error="settings_service_unavailable",
+            message="Minerva settings could not be saved",
+        ), 503
+    return jsonify(status="success", settings=settings)
+
+
 def _selected_ai_credential(email, account_id):
     ok, error, selection = get_ai_selection(email, account_id)
     if not ok:
@@ -760,6 +804,33 @@ def minerva_respond():
 
     provider = selection["provider"]
     model = selection["model"]
+    settings_ok, settings_error, minerva_settings = get_minerva_settings(
+        email,
+        identity["account_id"],
+    )
+    if not settings_ok:
+        logger.error("Minerva settings read failed for %s: %s", email, settings_error)
+        return jsonify(
+            status="error",
+            error="settings_service_unavailable",
+            message="Minerva settings are unavailable",
+        ), 503
+
+    existing_cards = None
+    if minerva_settings["include_card_context"]:
+        cards_ok, cards_error, existing_cards = list_flashcards(
+            email,
+            identity["account_id"],
+            limit=None,
+        )
+        if not cards_ok:
+            logger.error("Minerva card context read failed for %s: %s", email, cards_error)
+            return jsonify(
+                status="error",
+                error="cards_service_unavailable",
+                message="Your existing cards could not be loaded",
+            ), 503
+
     try:
         api_key = decrypt_api_key(
             credential.get("ciphertext", ""),
@@ -767,7 +838,14 @@ def minerva_respond():
             provider=provider,
             aad_version=_stored_credential_aad_version(provider, credential),
         )
-        result = respond_minerva(message, email, api_key, provider, model)
+        result = respond_minerva(
+            message,
+            email,
+            api_key,
+            provider,
+            model,
+            existing_cards=existing_cards,
+        )
     except ValueError as error:
         response_message = (
             "Message must be 2000 characters or fewer"
@@ -1539,6 +1617,8 @@ def root():
             "delete_account": "DELETE /api/auth/account",
             "get_ai_settings": "GET /api/user/ai-settings",
             "set_ai_settings": "PUT /api/user/ai-settings",
+            "get_minerva_settings": "GET /api/user/minerva-settings",
+            "set_minerva_settings": "PUT /api/user/minerva-settings",
             "set_ai_credential": "PUT /api/user/ai-credentials/{provider}",
             "get_ai_credential_status": "GET /api/user/ai-credentials/{provider}",
             "delete_ai_credential": "DELETE /api/user/ai-credentials/{provider}",

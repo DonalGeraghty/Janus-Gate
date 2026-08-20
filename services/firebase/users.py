@@ -27,6 +27,7 @@ from ..logging_service import logger
 
 
 ACCOUNT_DELETION_STALE_AFTER = timedelta(minutes=10)
+MINERVA_CARD_CONTEXT_FIELD = "minerva_include_card_context"
 
 
 def _mark_account_deleting_in_transaction(
@@ -399,6 +400,98 @@ def save_ai_selection(email, provider, model, expected_account_id):
             "ai_model": model,
         })
         return True, None, selection
+
+
+def get_minerva_settings(email, expected_account_id):
+    email_key = normalize_user_email(email)
+    if not email_key:
+        return False, "invalid_email", None
+
+    if db_state.users_collection_ref:
+        try:
+            document = db_state.users_collection_ref.document(email_key).get()
+            if not document.exists:
+                return False, "not_found", None
+            data = document.to_dict() or {}
+            if data.get(ACCOUNT_DELETION_FIELD):
+                return False, "account_deleting", None
+            if not account_id_matches(expected_account_id, data):
+                return False, "account_mismatch", None
+            return True, None, {
+                "include_card_context": bool(data.get(MINERVA_CARD_CONTEXT_FIELD, False)),
+            }
+        except Exception as error:
+            logger.error("Firestore Minerva settings read failed", extra={
+                "operation": "get_minerva_settings",
+                "error": type(error).__name__,
+            })
+            return False, "database_error", None
+
+    with db_state.memory_lock:
+        user = db_state.auth_users_memory.get(email_key)
+        if not user:
+            return False, "not_found", None
+        if user.get(ACCOUNT_DELETION_FIELD):
+            return False, "account_deleting", None
+        if not account_id_matches(expected_account_id, user):
+            return False, "account_mismatch", None
+        return True, None, {
+            "include_card_context": bool(user.get(MINERVA_CARD_CONTEXT_FIELD, False)),
+        }
+
+
+def _save_minerva_settings_in_transaction(
+    transaction,
+    user_ref,
+    expected_account_id,
+    include_card_context,
+):
+    document = user_ref.get(transaction=transaction)
+    if not document.exists:
+        return False, "not_found", None
+    data = document.to_dict() or {}
+    if data.get(ACCOUNT_DELETION_FIELD):
+        return False, "account_deleting", None
+    if not account_id_matches(expected_account_id, data):
+        return False, "account_mismatch", None
+
+    settings = {"include_card_context": include_card_context}
+    transaction.update(user_ref, {
+        MINERVA_CARD_CONTEXT_FIELD: include_card_context,
+        "minerva_settings_updated_at": firestore.SERVER_TIMESTAMP,
+    })
+    return True, None, settings
+
+
+def save_minerva_settings(email, expected_account_id, include_card_context):
+    email_key = normalize_user_email(email)
+    if not email_key:
+        return False, "invalid_email", None
+    if type(include_card_context) is not bool:
+        return False, "invalid_settings", None
+
+    if db_state.users_collection_ref:
+        result = _run_account_transaction(
+            _save_minerva_settings_in_transaction,
+            email_key,
+            expected_account_id,
+            include_card_context,
+        )
+        if len(result) == 2:
+            success, error = result
+            return success, error, None
+        return result
+
+    with db_state.memory_lock:
+        user = db_state.auth_users_memory.get(email_key)
+        if not user:
+            return False, "not_found", None
+        if user.get(ACCOUNT_DELETION_FIELD):
+            return False, "account_deleting", None
+        if not account_id_matches(expected_account_id, user):
+            return False, "account_mismatch", None
+        user[MINERVA_CARD_CONTEXT_FIELD] = include_card_context
+        return True, None, {"include_card_context": include_card_context}
 
 
 def _clear_user_memory(email_key):
