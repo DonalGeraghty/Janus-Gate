@@ -1,4 +1,4 @@
-"""Provider-neutral dispatch for AI-backed application operations."""
+"""Provider-neutral dispatch for AI-backed product operations."""
 
 from importlib import import_module
 
@@ -128,6 +128,20 @@ def recommend_meals(context, email, api_key, provider="openai", model=None):
         provider,
         "recommend_meals",
         context,
+        email,
+        api_key,
+        model,
+    )
+
+
+def respond_minerva(message, email, api_key, provider="openai", model=None):
+    if not is_supported_provider(provider):
+        raise ValueError("invalid_provider")
+    model = _validated_model(provider, model)
+    return _call_provider(
+        provider,
+        "respond_minerva",
+        message,
         email,
         api_key,
         model,

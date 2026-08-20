@@ -11,6 +11,11 @@ from pydantic import ValidationError
 
 from core.auth_service import decode_access_token, login_user, register_user, verify_password
 from core.nutrition_service import MealRecommendationInput, NutritionEntryInput
+from core.flashcard_service import (
+    FlashcardInput,
+    FlashcardReviewInput,
+    FlashcardUpdateInput,
+)
 from core.workout_service import WorkoutHistoryInput
 from core.push_service import (
     PushSettingsInput,
@@ -18,7 +23,9 @@ from core.push_service import (
     PushSubscriptionInput,
 )
 from services.firebase_service import (
+    create_flashcard,
     create_nutrition_entry,
+    delete_flashcard,
     delete_ai_credential,
     delete_nutrition_entry,
     delete_user_account,
@@ -28,6 +35,7 @@ from services.firebase_service import (
     get_ai_selection,
     get_user_record,
     get_user_record_for_account_deletion,
+    list_flashcards,
     list_nutrition_entries,
     delete_push_subscription,
     get_push_settings,
@@ -35,7 +43,9 @@ from services.firebase_service import (
     save_push_subscription,
     save_ai_credential,
     save_ai_selection,
+    review_flashcard,
     update_nutrition_entry,
+    update_flashcard,
     delete_workout_entry,
     list_workout_entries,
     save_workout_entry,
@@ -65,6 +75,7 @@ from services.ai_service import (
     analyze_meal,
     analyze_workout,
     recommend_meals,
+    respond_minerva,
     validate_provider_api_key as validate_api_key,
 )
 from services.logging_service import get_flask_app_logger
@@ -72,7 +83,11 @@ from services.web_push_service import (
     dispatch_due_reminders,
     public_push_configuration,
 )
-from services.ai_contract import MAX_MEAL_MESSAGE_LENGTH, MAX_WORKOUT_MESSAGE_LENGTH
+from services.ai_contract import (
+    MAX_MEAL_MESSAGE_LENGTH,
+    MAX_MINERVA_MESSAGE_LENGTH,
+    MAX_WORKOUT_MESSAGE_LENGTH,
+)
 
 
 logger = get_flask_app_logger()
@@ -660,6 +675,123 @@ def _stored_credential_aad_version(provider, credential):
     if aad_version is None:
         return 1 if provider == "openai" else 2
     return aad_version
+
+
+def _ai_product_error(error, provider, unavailable_message):
+    if isinstance(error, AIAuthenticationError):
+        return jsonify(
+            status="error",
+            error="provider_key_invalid",
+            provider=provider,
+            message=f"Your {provider_name(provider)} API key is no longer valid",
+        ), 422
+    if isinstance(error, AIAuthorizationError):
+        return jsonify(
+            status="error",
+            error="provider_access_denied",
+            provider=provider,
+            message=(
+                f"Your {provider_name(provider)} API key does not have the "
+                "required API access"
+            ),
+        ), 403
+    if isinstance(error, AIBillingError):
+        return jsonify(
+            status="error",
+            error="provider_billing_required",
+            provider=provider,
+            message=_provider_billing_message(provider),
+        ), 402
+    if isinstance(error, AIRateLimitError):
+        return jsonify(
+            status="error",
+            error="provider_rate_limited",
+            provider=provider,
+            message="Minerva is temporarily busy",
+        ), 429
+    logger.error("Minerva AI request failed: %s", error)
+    return jsonify(
+        status="error",
+        error="provider_unavailable",
+        provider=provider,
+        message=unavailable_message,
+    ), 502
+
+
+@app.post("/api/minerva/respond")
+def minerva_respond():
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+    email = identity["email"]
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify(status="error", error="Message is required"), 400
+    message = data.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return jsonify(status="error", error="Message is required"), 400
+    message = message.strip()
+    if len(message) > MAX_MINERVA_MESSAGE_LENGTH:
+        return jsonify(status="error", error="Message must be 2000 characters or fewer"), 400
+
+    selection, credential, error = _selected_ai_credential(
+        email,
+        identity["account_id"],
+    )
+    if error:
+        logger.error("Credential read failed for %s: %s", email, error)
+        return jsonify(
+            status="error",
+            error=error,
+            message=(
+                "AI settings are unavailable"
+                if error == "settings_service_unavailable"
+                else "Secure credential storage is unavailable"
+            ),
+        ), 503
+    if not credential:
+        provider = selection["provider"]
+        return jsonify(
+            status="error",
+            error="provider_key_required",
+            provider=provider,
+            message=f"Add your {provider_name(provider)} API key before asking Minerva",
+        ), 409
+
+    provider = selection["provider"]
+    model = selection["model"]
+    try:
+        api_key = decrypt_api_key(
+            credential.get("ciphertext", ""),
+            email,
+            provider=provider,
+            aad_version=_stored_credential_aad_version(provider, credential),
+        )
+        result = respond_minerva(message, email, api_key, provider, model)
+    except ValueError as error:
+        response_message = (
+            "Message must be 2000 characters or fewer"
+            if str(error) == "message_too_long"
+            else "Message is required"
+        )
+        return jsonify(status="error", error=response_message), 400
+    except (CredentialConfigurationError, CredentialEncryptionError) as error:
+        logger.error("Credential decryption unavailable: %s", type(error).__name__)
+        return jsonify(
+            status="error",
+            error="credential_service_unavailable",
+            message="Secure credential storage is unavailable",
+        ), 503
+    except (
+        AIAuthenticationError,
+        AIAuthorizationError,
+        AIBillingError,
+        AIRateLimitError,
+        AIServiceError,
+    ) as error:
+        return _ai_product_error(error, provider, "Minerva could not answer that")
+
+    return jsonify(status="success", response=result)
 
 
 @app.post("/api/nutrition/analyze")
@@ -1267,6 +1399,130 @@ def workout_entry_delete(entry_id):
     return jsonify(status="success")
 
 
+def _flashcard_failure(error, action):
+    if error in {"invalid_card_id", "invalid_email"}:
+        return jsonify(status="error", error="Invalid flashcard"), 400
+    if error == "not_found":
+        return jsonify(status="error", error="Flashcard not found"), 404
+    logger.error("Flashcard %s failed: %s", action, error)
+    return jsonify(status="error", error=f"Could not {action} flashcard"), 500
+
+
+@app.post("/api/flashcards")
+def flashcard_create():
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+    try:
+        card_input = FlashcardInput.model_validate(request.get_json(silent=True) or {})
+    except ValidationError:
+        return jsonify(status="error", error="Invalid flashcard"), 400
+
+    created, error, card = create_flashcard(
+        identity["email"],
+        card_input.front,
+        card_input.back,
+        card_input.tags,
+        card_input.source_message,
+        identity["account_id"],
+        str(card_input.client_request_id) if card_input.client_request_id else None,
+    )
+    if not created:
+        return _flashcard_failure(error, "save")
+    return jsonify(status="success", card=card), 201
+
+
+def _flashcard_list(due=False):
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+    try:
+        default_limit = 50 if due else 200
+        limit = min(max(int(request.args.get("limit", default_limit)), 1), 500)
+    except ValueError:
+        return jsonify(status="error", error="Limit must be a number"), 400
+    tag = request.args.get("tag")
+    ok, error, cards = list_flashcards(
+        identity["email"],
+        identity["account_id"],
+        limit,
+        tag,
+        datetime.now(timezone.utc) if due else None,
+    )
+    if not ok:
+        return _flashcard_failure(error, "load")
+    tags = sorted({tag for card in cards for tag in card.get("tags", [])})
+    return jsonify(status="success", cards=cards, tags=tags)
+
+
+@app.get("/api/flashcards")
+def flashcards_list():
+    return _flashcard_list(due=False)
+
+
+@app.get("/api/flashcards/due")
+def flashcards_due():
+    return _flashcard_list(due=True)
+
+
+@app.put("/api/flashcards/<card_id>")
+def flashcard_update(card_id):
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+    try:
+        card_input = FlashcardUpdateInput.model_validate(request.get_json(silent=True) or {})
+    except ValidationError:
+        return jsonify(status="error", error="Invalid flashcard"), 400
+    updated, error, card = update_flashcard(
+        identity["email"],
+        card_id,
+        card_input.front,
+        card_input.back,
+        card_input.tags,
+        identity["account_id"],
+    )
+    if not updated:
+        return _flashcard_failure(error, "update")
+    return jsonify(status="success", card=card)
+
+
+@app.delete("/api/flashcards/<card_id>")
+def flashcard_delete(card_id):
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+    deleted, error = delete_flashcard(
+        identity["email"],
+        card_id,
+        identity["account_id"],
+    )
+    if not deleted:
+        return _flashcard_failure(error, "delete")
+    return jsonify(status="success")
+
+
+@app.post("/api/flashcards/<card_id>/reviews")
+def flashcard_review(card_id):
+    identity = _authenticated_identity()
+    if not identity:
+        return jsonify(status="error", error="Unauthorized"), 401
+    try:
+        review_input = FlashcardReviewInput.model_validate(request.get_json(silent=True) or {})
+    except ValidationError:
+        return jsonify(status="error", error="Invalid flashcard review"), 400
+    reviewed, error, card, review = review_flashcard(
+        identity["email"],
+        card_id,
+        review_input.rating,
+        identity["account_id"],
+        str(review_input.client_request_id) if review_input.client_request_id else None,
+    )
+    if not reviewed:
+        return _flashcard_failure(error, "review")
+    return jsonify(status="success", card=card, review=review)
+
+
 @app.get("/health")
 def health_check():
     return jsonify(status="healthy", database=get_database_status())
@@ -1303,6 +1559,13 @@ def root():
             "list_workout_history": "GET /api/workouts",
             "save_workout_entry": "PUT /api/workouts/{entry_id}",
             "delete_workout_entry": "DELETE /api/workouts/{entry_id}",
+            "ask_minerva": "POST /api/minerva/respond",
+            "create_flashcard": "POST /api/flashcards",
+            "list_flashcards": "GET /api/flashcards",
+            "list_due_flashcards": "GET /api/flashcards/due",
+            "update_flashcard": "PUT /api/flashcards/{card_id}",
+            "delete_flashcard": "DELETE /api/flashcards/{card_id}",
+            "review_flashcard": "POST /api/flashcards/{card_id}/reviews",
             "health": "GET /health",
         },
     )
