@@ -18,13 +18,16 @@ from pydantic import ValidationError
 
 from .ai_contract import (
     MAX_MEAL_MESSAGE_LENGTH,
+    MAX_MINERVA_MESSAGE_LENGTH,
     MAX_WORKOUT_MESSAGE_LENGTH,
     MEAL_ANALYSIS_PROMPT,
     MEAL_RECOMMENDATION_PROMPT,
+    MINERVA_PROMPT,
     WORKOUT_ANALYSIS_PROMPT,
     FoodItem,
     MealAnalysis,
     MealRecommendation,
+    MinervaResponse,
     RecommendedMeal,
     WorkoutAnalysis,
 )
@@ -298,3 +301,41 @@ def recommend_meals(context, email, api_key, model=None):
         ),
     })
     return result
+
+
+def respond_minerva(message, email, api_key, model=None):
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("message_required")
+    message = message.strip()
+    if len(message) > MAX_MINERVA_MESSAGE_LENGTH:
+        raise ValueError("message_too_long")
+
+    try:
+        response = OpenAI(api_key=api_key).responses.parse(
+            model=_model_name(model),
+            input=[
+                {"role": "system", "content": MINERVA_PROMPT},
+                {"role": "user", "content": message},
+            ],
+            text_format=MinervaResponse,
+            reasoning={"effort": "low"},
+            safety_identifier=_safety_identifier(email),
+            store=False,
+        )
+    except (
+        AuthenticationError,
+        PermissionDeniedError,
+        RateLimitError,
+        APIConnectionError,
+        APITimeoutError,
+        APIStatusError,
+        ValidationError,
+        json.JSONDecodeError,
+        TypeError,
+    ) as error:
+        _raise_mapped_openai_error(error)
+
+    result = response.output_parsed
+    if result is None:
+        raise OpenAIServiceError("OpenAI returned no Minerva response")
+    return result.model_dump()

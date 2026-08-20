@@ -14,5 +14,7 @@ users_collection_ref = None
 auth_users_memory = {}
 nutrition_entries_memory = {}
 workout_history_memory = {}
+flashcards_memory = {}
+flashcard_reviews_memory = {}
 push_subscriptions_memory = {}
 memory_lock = RLock()

@@ -20,6 +20,14 @@ from .workouts import (
     list_workout_entries,
     save_workout_entry,
 )
+from .flashcards import (
+    create_flashcard,
+    delete_flashcard,
+    delete_flashcards,
+    list_flashcards,
+    review_flashcard,
+    update_flashcard,
+)
 from .push import (
     claim_push_reminder,
     delete_push_data,

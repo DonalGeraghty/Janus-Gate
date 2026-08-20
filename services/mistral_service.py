@@ -8,12 +8,15 @@ from pydantic import ValidationError
 
 from .ai_contract import (
     MAX_MEAL_MESSAGE_LENGTH,
+    MAX_MINERVA_MESSAGE_LENGTH,
     MAX_WORKOUT_MESSAGE_LENGTH,
     MEAL_ANALYSIS_PROMPT,
     MEAL_RECOMMENDATION_PROMPT,
+    MINERVA_PROMPT,
     WORKOUT_ANALYSIS_PROMPT,
     MealAnalysis,
     MealRecommendation,
+    MinervaResponse,
     WorkoutAnalysis,
 )
 from .ai_errors import (
@@ -269,3 +272,38 @@ def recommend_meals(context, email, api_key, model):
         ),
     })
     return result
+
+
+def respond_minerva(message, email, api_key, model):
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("message_required")
+    message = message.strip()
+    if len(message) > MAX_MINERVA_MESSAGE_LENGTH:
+        raise ValueError("message_too_long")
+    model = _normalize_model(model)
+
+    try:
+        with Mistral(api_key=api_key) as client:
+            response = client.chat.parse(
+                model=model,
+                messages=[
+                    {"role": "system", "content": MINERVA_PROMPT},
+                    {"role": "user", "content": message},
+                ],
+                response_format=MinervaResponse,
+                temperature=0,
+            )
+        result = _parsed_response(
+            response,
+            MinervaResponse,
+            "Mistral returned no Minerva response",
+        )
+    except (
+        errors.MistralError,
+        httpx.RequestError,
+        ValidationError,
+        json.JSONDecodeError,
+        TypeError,
+    ) as error:
+        _raise_mapped_mistral_error(error)
+    return result.model_dump()
