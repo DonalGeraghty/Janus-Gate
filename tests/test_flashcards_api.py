@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from app import app
 from core.flashcard_service import schedule_review
+from services.ai_contract import MinervaResponse
 from services.firebase import db_state
 
 
@@ -11,11 +12,11 @@ OPENAI_SELECTION = {"provider": "openai", "model": "gpt-5.6-sol"}
 SAMPLE_DRAFT = {
     "kind": "card_draft",
     "reply": "I prepared a Hindi vocabulary card for review.",
-    "card": {
+    "cards": [{
         "front": "What does कल mean in Hindi?",
-        "back": "कल can mean yesterday or tomorrow, depending on context.",
+        "back": "Yesterday or tomorrow; context-dependent.",
         "suggested_tags": ["hindi", "vocabulary"],
-    },
+    }],
 }
 
 
@@ -84,6 +85,22 @@ class FlashcardsApiTests(unittest.TestCase):
             "openai",
             "gpt-5.6-sol",
         )
+
+    def test_minerva_contract_accepts_multiple_card_drafts(self):
+        second_draft = {
+            "front": "What part of speech is कल?",
+            "back": "Adverb.",
+            "suggested_tags": ["hindi", "grammar"],
+        }
+
+        response = MinervaResponse.model_validate({
+            **SAMPLE_DRAFT,
+            "reply": "I prepared two Hindi cards for review.",
+            "cards": [*SAMPLE_DRAFT["cards"], second_draft],
+        })
+
+        self.assertEqual(len(response.cards), 2)
+        self.assertEqual(response.cards[1].back, "Adverb.")
 
     def test_minerva_requires_selected_provider_key(self):
         headers = self.register()
