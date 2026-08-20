@@ -24,6 +24,7 @@ from .ai_contract import (
     MealRecommendation,
     MinervaResponse,
     WorkoutAnalysis,
+    minerva_user_message,
 )
 from .ai_errors import (
     AIAuthenticationError,
@@ -316,12 +317,13 @@ def recommend_meals(context, email, api_key, model=None):
     return result
 
 
-def respond_minerva(message, email, api_key, model=None):
+def respond_minerva(message, email, api_key, model=None, existing_cards=None):
     if not isinstance(message, str) or not message.strip():
         raise ValueError("message_required")
     message = message.strip()
     if len(message) > MAX_MINERVA_MESSAGE_LENGTH:
         raise ValueError("message_too_long")
+    provider_message = minerva_user_message(message, existing_cards)
     model = _model_name(model)
 
     try:
@@ -334,7 +336,7 @@ def respond_minerva(message, email, api_key, model=None):
                 model=model,
                 max_tokens=MINERVA_MAX_TOKENS,
                 system=MINERVA_PROMPT,
-                messages=[{"role": "user", "content": message}],
+                messages=[{"role": "user", "content": provider_message}],
                 output_format=MinervaResponse,
             )
         result = _parsed_response(

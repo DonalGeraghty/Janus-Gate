@@ -134,15 +134,27 @@ def recommend_meals(context, email, api_key, provider="openai", model=None):
     )
 
 
-def respond_minerva(message, email, api_key, provider="openai", model=None):
+def respond_minerva(
+    message,
+    email,
+    api_key,
+    provider="openai",
+    model=None,
+    existing_cards=None,
+):
     if not is_supported_provider(provider):
         raise ValueError("invalid_provider")
     model = _validated_model(provider, model)
-    return _call_provider(
-        provider,
-        "respond_minerva",
+    arguments = [
         message,
         email,
         api_key,
         model,
+    ]
+    if existing_cards is not None:
+        arguments.append(existing_cards)
+    return _call_provider(
+        provider,
+        "respond_minerva",
+        *arguments,
     )

@@ -62,6 +62,7 @@ class AISettingsApiTests(unittest.TestCase):
 
     def test_ai_routes_require_authentication(self):
         self.assertEqual(self.client.get("/api/user/ai-settings").status_code, 401)
+        self.assertEqual(self.client.get("/api/user/minerva-settings").status_code, 401)
         self.assertEqual(
             self.client.put(
                 "/api/user/ai-settings",
@@ -79,6 +80,37 @@ class AISettingsApiTests(unittest.TestCase):
                     json={"api_key": api_key} if method == "put" else None,
                 )
                 self.assertEqual(response.status_code, 401)
+
+    def test_minerva_card_context_defaults_off_and_persists(self):
+        headers = self.register()
+
+        initial = self.client.get("/api/user/minerva-settings", headers=headers)
+        self.assertEqual(initial.status_code, 200)
+        self.assertEqual(
+            initial.get_json()["settings"],
+            {"include_card_context": False},
+        )
+
+        updated = self.client.put(
+            "/api/user/minerva-settings",
+            headers=headers,
+            json={"include_card_context": True},
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(
+            updated.get_json()["settings"],
+            {"include_card_context": True},
+        )
+        self.assertTrue(
+            db_state.auth_users_memory["user@example.com"]["minerva_include_card_context"]
+        )
+
+        invalid = self.client.put(
+            "/api/user/minerva-settings",
+            headers=headers,
+            json={"include_card_context": "yes"},
+        )
+        self.assertEqual(invalid.status_code, 400)
 
     def test_settings_return_catalog_selection_and_safe_statuses(self):
         headers = self.register()

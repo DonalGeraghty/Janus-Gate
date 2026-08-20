@@ -195,21 +195,23 @@ def _filter_and_sort(cards, tag, due_before, limit):
         filtered.append(card)
     key = "due_at" if due_before else "created_at"
     filtered.sort(key=lambda card: card.get(key) or "", reverse=not due_before)
-    return filtered[:limit]
+    return filtered if limit is None else filtered[:limit]
 
 
 def list_flashcards(email, account_id=None, limit=200, tag=None, due_before=None):
     email_key = normalize_user_email(email)
     if not email_key:
         return False, "invalid_email", None
-    scan_limit = min(500, max(limit, 1) * 5)
+    scan_limit = None if limit is None else min(500, max(limit, 1) * 5)
 
     if db_state.users_collection_ref and db_state.db is not None:
         try:
             user_ref = db_state.users_collection_ref.document(email_key)
             query = _cards_collection(email_key).order_by(
                 "created_at", direction=firestore.Query.DESCENDING
-            ).limit(scan_limit)
+            )
+            if scan_limit is not None:
+                query = query.limit(scan_limit)
             transaction = db_state.db.transaction()
             ok, error, cards = firestore.transactional(
                 _list_cards_in_transaction
